@@ -10,8 +10,8 @@ import {
   instanceCode, buildShuffledDeck, handSizeForTeamCount, sequencesNeededToWin,
 } from './cards.js';
 import {
-  legalTargetsFor, isDeadCard, validateMove, findSequences, lockedIndicesFrom, checkWinner, nextTurnIndex,
-  ambientHighlightSet,
+  isDeadCard, validateMove, findSequences, lockedIndicesFrom, checkWinner, nextTurnIndex,
+  ambientHighlightSet, autoResolveTargets,
 } from './rules.js';
 import { BoardView, TEAM_COLOR } from './render.js';
 
@@ -35,9 +35,13 @@ let roomCode = null;
 let roomRef = null;
 let unsubRoom = null;
 let room = null; // last snapshot data
-let selectedInstanceId = null;
 let boardView = null;
+const UNDO_ENABLED = false; // flip to true to bring back the 3s undo window
+const UNDO_MS = 3000;
+let pendingMove = null; // { instanceId, index, action, code, deadline } — staged locally before commit
+let pendingMoveTimeout = null;
 let lastSeenMoveTs = undefined; // undefined = not initialized yet for this room
+let wasMyTurn = undefined; // undefined = not initialized yet for this room
 let timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
 let timerIntervalId = null;
 let deferredInstallPrompt = null;
@@ -60,6 +64,46 @@ function makeCode() {
   let s = '';
   for (let i = 0; i < 4; i++) s += letters[Math.floor(Math.random() * letters.length)];
   return s;
+}
+
+// ---------------- Notification sounds (synthesized, no audio assets) ----------------
+let audioCtx = null;
+function ensureAudio() {
+  if (!audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) audioCtx = new Ctx();
+  }
+  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+}
+// Browsers block audio until a user gesture — unlock on the first tap
+// anywhere so sounds are ready by the time a turn/move actually happens.
+document.addEventListener('pointerdown', ensureAudio, { once: true });
+
+function playTone(freq, { start = 0, duration = 0.16, type = 'sine', volume = 0.22 } = {}) {
+  if (!audioCtx) return;
+  const t0 = audioCtx.currentTime + start;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(volume, t0 + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.02);
+}
+// A rising two-note chime — distinct from the move tick so "it's your turn"
+// never gets confused with "someone just played a card".
+function playTurnSound() {
+  ensureAudio();
+  playTone(587, { start: 0, duration: 0.14, type: 'sine', volume: 0.22 });
+  playTone(784, { start: 0.12, duration: 0.22, type: 'sine', volume: 0.24 });
+}
+// A single short, low-key tick for any card played (place, remove, or wild).
+function playMoveSound() {
+  ensureAudio();
+  playTone(392, { start: 0, duration: 0.1, type: 'triangle', volume: 0.16 });
 }
 
 // ---------------- Version check / update banner ----------------
@@ -309,6 +353,7 @@ function enterRoom(code) {
   roomCode = code;
   roomRef = doc(db, 'rooms', code);
   lastSeenMoveTs = undefined;
+  wasMyTurn = undefined;
   localStorage.setItem('cr_room', code);
   if (unsubRoom) unsubRoom();
   unsubRoom = onSnapshot(roomRef, (snap) => {
@@ -328,7 +373,7 @@ function leaveRoom() {
   roomRef = null;
   roomCode = null;
   room = null;
-  selectedInstanceId = null;
+  cancelPendingMove();
   stopTurnTimer();
   localStorage.removeItem('cr_room');
   showScreen('screen-home');
@@ -450,22 +495,21 @@ function renderGame() {
   const teamCount = room.settings.teamCount;
   const sequences = findSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
-  let highlight = new Set();
-  if (isMyTurn()) {
-    if (selectedInstanceId) {
-      // A selected wild jack can go on any empty cell — highlighting all of
-      // them would just flood the board, so show nothing and let the player
-      // tap wherever they want (validateMove still allows any empty cell).
-      if (!isTwoEyedJack(instanceCode(selectedInstanceId))) {
-        const { targets } = legalTargetsFor(game.board, selectedInstanceId);
-        highlight = new Set(targets);
-      }
-    } else {
-      const hand = game.hands[playerId] || [];
-      highlight = ambientHighlightSet(game.board, hand, locked);
-    }
+
+  // While a move is staged (pending the undo window), preview it locally —
+  // nothing is written to Firestore yet, so this is purely a display overlay.
+  let displayBoard = game.board;
+  if (pendingMove) {
+    displayBoard = game.board.slice();
+    displayBoard[pendingMove.index] = pendingMove.action === 'place' ? myTeam() : null;
   }
-  boardView.setState({ board: game.board, highlight, locked, myTeam: myTeam() });
+
+  let highlight = new Set();
+  if (isMyTurn() && !pendingMove) {
+    const hand = game.hands[playerId] || [];
+    highlight = ambientHighlightSet(game.board, hand, locked);
+  }
+  boardView.setState({ board: displayBoard, highlight, locked, myTeam: myTeam() });
 
   const turnBanner = $('turn-banner');
   const curPid = game.currentPlayerId;
@@ -487,7 +531,18 @@ function renderGame() {
   if (game.lastMove && game.lastMove.ts !== lastSeenMoveTs) {
     const isFirstLoad = lastSeenMoveTs === undefined;
     lastSeenMoveTs = game.lastMove.ts;
-    if (!isFirstLoad) showShoutout(game.lastMove);
+    if (!isFirstLoad) {
+      showShoutout(game.lastMove);
+      if (game.lastMove.type === 'card') {
+        playMoveSound();
+        boardView.flashCell(game.lastMove.targetIndex);
+      }
+    }
+  }
+
+  if (isMyTurn() !== wasMyTurn) {
+    if (isMyTurn() && wasMyTurn !== undefined) playTurnSound();
+    wasMyTurn = isMyTurn();
   }
 
   const pauseOverlay = $('pause-overlay');
@@ -502,11 +557,15 @@ function renderGame() {
   renderHand();
 }
 
+const CARD_ASPECT = 0.72; // width/height, matches the board's card-shaped cells
 function renderHand() {
   const game = room.game;
   const scroller = $('hand-scroller');
   scroller.innerHTML = '';
-  const hand = game.hands[playerId] || [];
+  const fullHand = game.hands[playerId] || [];
+  // The card being played is hidden from the hand as soon as it's staged,
+  // before the move is even committed — makes the preview feel immediate.
+  const hand = pendingMove ? fullHand.filter((id) => id !== pendingMove.instanceId) : fullHand;
   const teamCount = room.settings.teamCount;
   const sequences = findSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
@@ -516,64 +575,117 @@ function renderHand() {
     const card = document.createElement('div');
     card.className = 'hand-card';
     if (SUIT_COLOR[cardSuit(code)] === 'red') card.classList.add('red');
-    if (instanceId === selectedInstanceId) card.classList.add('selected');
     if (isMyTurn() && isDeadCard(game.board, instanceId, locked)) card.classList.add('dead');
-    if (isTwoEyedJack(code)) card.classList.add('jack-wild');
-    else if (isOneEyedJack(code)) card.classList.add('jack-remove');
-    card.innerHTML = `<div class="r">${cardRank(code)}</div><div class="s">${SUIT_SYMBOL[cardSuit(code)]}</div>`;
-    card.addEventListener('click', () => onHandCardTap(instanceId));
+    let badge = '';
+    if (isTwoEyedJack(code)) {
+      card.classList.add('jack-wild');
+      badge = '<span class="jack-badge wild" title="Wild — play anywhere">W</span>';
+    } else if (isOneEyedJack(code)) {
+      card.classList.add('jack-remove');
+      badge = '<span class="jack-badge remove" title="Removal — take an opponent\'s chip">✕</span>';
+    }
+    card.innerHTML = `<div class="r">${cardRank(code)}</div><div class="s">${SUIT_SYMBOL[cardSuit(code)]}</div>${badge}`;
     scroller.appendChild(card);
+  }
+
+  // Explicitly size every card from the tray's real width so all of them
+  // (up to 7) always fit with no horizontal scrolling, on any device —
+  // flexbox shrink + aspect-ratio alone proved unreliable across browsers.
+  if (hand.length > 0) {
+    const gap = 6;
+    const available = scroller.clientWidth - gap * (hand.length - 1);
+    const width = Math.max(30, Math.min(62, Math.floor(available / hand.length)));
+    for (const el of scroller.children) {
+      el.style.width = width + 'px';
+      el.style.height = Math.round(width / CARD_ASPECT) + 'px';
+    }
   }
 
   const hint = $('hand-hint');
   const deadBtn = $('btn-dead-card');
-  if (isMyTurn() && selectedInstanceId) {
-    const dead = isDeadCard(game.board, selectedInstanceId, locked);
-    if (dead) {
-      hint.textContent = 'No open spots for this card.';
-      deadBtn.hidden = false;
-    } else {
-      const code = instanceCode(selectedInstanceId);
-      hint.textContent = isTwoEyedJack(code)
-        ? 'Wild! Tap anywhere on the board to place your chip.'
-        : isOneEyedJack(code)
-        ? 'Tap an opponent chip to remove it.'
-        : 'Tap the highlighted space to place your chip.';
-      deadBtn.hidden = true;
-    }
-  } else if (isMyTurn()) {
-    const anyPlay = hand.some((id) => !isDeadCard(game.board, id, locked));
-    hint.textContent = anyPlay
-      ? 'Tap a card in your hand to play it'
-      : 'No plays available — tap a card to swap it';
-    deadBtn.hidden = true;
+  $('hand-footer').hidden = !!pendingMove;
+  $('undo-bar').hidden = !pendingMove;
+  if (isMyTurn()) {
+    const map = autoResolveTargets(game.board, fullHand, locked);
+    hint.textContent = map.size > 0
+      ? 'Tap a highlighted space to play a card'
+      : 'No plays available — swap a dead card';
+    deadBtn.hidden = map.size > 0;
   } else {
     hint.textContent = 'Waiting for your turn…';
     deadBtn.hidden = true;
   }
 }
 
-function onHandCardTap(instanceId) {
-  if (!isMyTurn()) return;
-  selectedInstanceId = selectedInstanceId === instanceId ? null : instanceId;
-  renderGame();
-}
-
 function onBoardPick(index) {
-  if (!isMyTurn() || !selectedInstanceId) return;
+  if (!isMyTurn() || pendingMove) return;
   const game = room.game;
   const teamCount = room.settings.teamCount;
   const sequences = findSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
-  const result = validateMove(game.board, selectedInstanceId, index, locked);
-  if (!result.ok) return;
-  applyMove(selectedInstanceId, index, result.action);
+  const hand = game.hands[playerId] || [];
+  const map = autoResolveTargets(game.board, hand, locked);
+  const entry = map.get(index);
+  if (!entry) return;
+  if (UNDO_ENABLED) startPendingMove(entry, index);
+  else applyMove(entry.instanceId, index, entry.action);
 }
 
 $('btn-dead-card').addEventListener('click', () => {
-  if (!isMyTurn() || !selectedInstanceId) return;
-  applyDeadCardSwap(selectedInstanceId);
+  if (!isMyTurn() || pendingMove) return;
+  const game = room.game;
+  const teamCount = room.settings.teamCount;
+  const sequences = findSequences(game.board, teamCount);
+  const locked = lockedIndicesFrom(sequences);
+  const hand = game.hands[playerId] || [];
+  const deadCard = hand.find((id) => isDeadCard(game.board, id, locked));
+  if (deadCard) applyDeadCardSwap(deadCard);
 });
+
+// ---------------- Stage-then-commit move flow (3s undo window) ----------------
+let undoCountdownInterval = null;
+
+function startPendingMove(entry, index) {
+  pendingMove = { instanceId: entry.instanceId, index, action: entry.action, code: instanceCode(entry.instanceId) };
+  renderGame();
+  let remaining = Math.ceil(UNDO_MS / 1000);
+  $('btn-undo-move').textContent = `Undo (${remaining})`;
+  clearInterval(undoCountdownInterval);
+  undoCountdownInterval = setInterval(() => {
+    remaining -= 1;
+    $('btn-undo-move').textContent = `Undo (${Math.max(remaining, 0)})`;
+  }, 1000);
+  const rank = cardRank(pendingMove.code);
+  const suit = SUIT_SYMBOL[cardSuit(pendingMove.code)];
+  $('undo-text').textContent = pendingMove.action === 'remove'
+    ? `Removing with ${rank}${suit}…`
+    : `Playing ${rank}${suit}…`;
+  clearTimeout(pendingMoveTimeout);
+  pendingMoveTimeout = setTimeout(commitPendingMove, UNDO_MS);
+}
+
+async function commitPendingMove() {
+  if (!pendingMove) return;
+  const { instanceId, index, action } = pendingMove;
+  clearTimeout(pendingMoveTimeout);
+  clearInterval(undoCountdownInterval);
+  pendingMoveTimeout = null;
+  pendingMove = null;
+  await applyMove(instanceId, index, action);
+  // Whether it succeeded (real snapshot will refresh shortly) or failed
+  // (toasted in applyMove), make sure the undo bar/hidden card don't get
+  // stuck showing a move that isn't actually pending anymore.
+  if (room) renderGame();
+}
+
+function cancelPendingMove() {
+  clearTimeout(pendingMoveTimeout);
+  clearInterval(undoCountdownInterval);
+  pendingMoveTimeout = null;
+  pendingMove = null;
+  if (room) renderGame();
+}
+$('btn-undo-move').addEventListener('click', cancelPendingMove);
 
 async function applyMove(instanceId, targetIndex, action) {
   const myPid = playerId;
@@ -629,7 +741,6 @@ async function applyMove(instanceId, targetIndex, action) {
         ...(winnerTeam == null ? { 'game.turnStartedAt': serverTimestamp() } : { state: 'finished' }),
       });
     });
-    selectedInstanceId = null;
   } catch (e) {
     toast('Move rejected — board may have changed');
   }
@@ -666,7 +777,6 @@ async function applyDeadCardSwap(instanceId) {
         'game.turnStartedAt': serverTimestamp(),
       });
     });
-    selectedInstanceId = null;
   } catch (e) {
     toast('Could not swap card');
   }

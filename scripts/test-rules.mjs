@@ -8,6 +8,7 @@ import {
   lockedIndicesFrom,
   checkWinner,
   ambientHighlightSet,
+  autoResolveTargets,
 } from '../public/rules.js';
 import { boardIndicesFor, CORNER_INDICES } from '../public/cards.js';
 
@@ -124,6 +125,18 @@ function emptyBoard() {
   const set2 = ambientHighlightSet(board2, ['JS#0'], new Set([16]));
   assert.ok(set2.has(15));
   assert.equal(set2.has(16), false);
+}
+
+// 10. autoResolveTargets: tap-the-board-directly resolution, wild included.
+{
+  const board = emptyBoard();
+  const spots7H = boardIndicesFor('7H');
+  const hand = ['7H#0', 'JH#0']; // normal + two-eyed wild
+  const map = autoResolveTargets(board, hand, new Set());
+  for (const i of spots7H) assert.equal(map.get(i).instanceId, '7H#0');
+  const wildOnlyCell = 50;
+  assert.ok(!spots7H.includes(wildOnlyCell));
+  assert.equal(map.get(wildOnlyCell).instanceId, 'JH#0'); // wild fills in as fallback
 }
 
 console.log('All rules.js tests passed.');

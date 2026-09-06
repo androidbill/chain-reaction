@@ -76,9 +76,13 @@
   </div>
   <div class="hand-tray">
     <div class="hand-scroller" id="hand-scroller"></div>
-    <div class="hand-footer">
-      <span class="hint" id="hand-hint">Tap a card in your hand to play it</span>
-      <button class="btn secondary" id="btn-dead-card" hidden>No plays — swap card</button>
+    <div class="hand-footer" id="hand-footer">
+      <span class="hint" id="hand-hint">Tap a highlighted space to play a card</span>
+      <button class="btn secondary" id="btn-dead-card" hidden>No plays — swap a card</button>
+    </div>
+    <div class="undo-bar" id="undo-bar" hidden>
+      <span id="undo-text">Card played</span>
+      <button class="btn" id="btn-undo-move">Undo (3)</button>
     </div>
   </div>
 </div>

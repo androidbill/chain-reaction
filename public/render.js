@@ -23,6 +23,9 @@ export class BoardView {
     this.highlight = new Set();
     this.locked = new Set();
     this.myTeam = 0;
+    this.flashIndex = null;
+    this.flashStart = 0;
+    this._flashRaf = null;
 
     canvas.style.touchAction = 'none';
     canvas.addEventListener('pointerdown', (e) => this._onDown(e));
@@ -108,6 +111,28 @@ export class BoardView {
     this.draw();
   }
 
+  // Briefly glows one cell — used to call out wherever the most recent move
+  // happened (place, remove, or wild), so it's obvious even on someone
+  // else's screen. Needs its own animation loop since nothing else would
+  // otherwise trigger a redraw during the 2s window.
+  flashCell(index) {
+    this.flashIndex = index;
+    this.flashStart = performance.now();
+    if (!this._flashRaf) this._flashLoop();
+  }
+
+  _flashLoop() {
+    const elapsed = performance.now() - this.flashStart;
+    if (elapsed >= 2000) {
+      this.flashIndex = null;
+      this._flashRaf = null;
+      this.draw();
+      return;
+    }
+    this.draw();
+    this._flashRaf = requestAnimationFrame(() => this._flashLoop());
+  }
+
   destroy() {
     this.ro.disconnect();
     window.removeEventListener('resize', this._onWindowResize);
@@ -121,7 +146,7 @@ export class BoardView {
   }
 
   _onDown(e) {
-    this.canvas.setPointerCapture(e.pointerId);
+    try { this.canvas.setPointerCapture(e.pointerId); } catch (err) { /* some browsers can reject this; harmless */ }
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     this.moved = 0;
     if (this.pointers.size === 1) {
@@ -266,6 +291,20 @@ export class BoardView {
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
         ctx.fill();
       }
+    }
+
+    if (index === this.flashIndex) {
+      const elapsed = performance.now() - this.flashStart;
+      const pulse = 0.5 + 0.5 * Math.sin(elapsed / 110);
+      ctx.globalAlpha = 0.3 + 0.35 * pulse;
+      ctx.fillStyle = '#ffffff';
+      roundRect(ctx, sx, sy, w, h, radius);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = Math.max(2, Math.min(w, h) * 0.07);
+      ctx.strokeStyle = '#ffffff';
+      roundRect(ctx, sx + ctx.lineWidth / 2, sy + ctx.lineWidth / 2, w - ctx.lineWidth, h - ctx.lineWidth, radius);
+      ctx.stroke();
     }
     ctx.restore();
   }

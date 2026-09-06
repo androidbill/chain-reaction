@@ -50,8 +50,8 @@ export function isDeadCard(board, instanceId, lockedIndices) {
 // every normal card's exact spot, plus removable targets for any one-eyed
 // jack. Two-eyed (wild) jacks are deliberately excluded: a wild can go on
 // literally any empty cell, so highlighting all of them would just flood
-// the board instead of being useful — the player selects the wild card
-// itself and then taps wherever they want.
+// the board instead of being useful — a wild is still usable by tapping an
+// otherwise-unhighlighted empty cell (see autoResolveTargets below).
 export function ambientHighlightSet(board, hand, lockedIndices) {
   const locked = lockedIndices || new Set();
   const set = new Set();
@@ -65,6 +65,42 @@ export function ambientHighlightSet(board, hand, lockedIndices) {
     }
   }
   return set;
+}
+
+// Resolves an entire hand into a single index -> {instanceId, action} map,
+// so the board can be tapped directly with no card-selection step. Priority
+// when more than one card could reach the same cell: an exact matching
+// card first (cheapest to spend), then a one-eyed jack removal, then a
+// two-eyed wild last (most valuable, held in reserve) — this is also what
+// makes a wild usable even though it's excluded from ambientHighlightSet.
+export function autoResolveTargets(board, hand, lockedIndices) {
+  const locked = lockedIndices || new Set();
+  const normals = [];
+  const oneEyed = [];
+  const twoEyed = [];
+  for (const instanceId of hand) {
+    const code = instanceCode(instanceId);
+    if (isTwoEyedJack(code)) twoEyed.push(instanceId);
+    else if (isOneEyedJack(code)) oneEyed.push(instanceId);
+    else normals.push(instanceId);
+  }
+  const map = new Map();
+  for (const instanceId of normals) {
+    const { targets } = legalTargetsFor(board, instanceId);
+    for (const t of targets) if (!map.has(t)) map.set(t, { instanceId, action: 'place' });
+  }
+  for (const instanceId of oneEyed) {
+    const { targets } = legalTargetsFor(board, instanceId);
+    for (const t of targets) {
+      if (locked.has(t) || map.has(t)) continue;
+      map.set(t, { instanceId, action: 'remove' });
+    }
+  }
+  for (const instanceId of twoEyed) {
+    const { targets } = legalTargetsFor(board, instanceId);
+    for (const t of targets) if (!map.has(t)) map.set(t, { instanceId, action: 'place' });
+  }
+  return map;
 }
 
 export function validateMove(board, instanceId, targetIndex, lockedIndices) {

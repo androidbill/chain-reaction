@@ -60,7 +60,11 @@
 <div class="screen" id="screen-game" hidden>
   <div class="game-top">
     <div class="turn-banner" id="turn-banner">—</div>
-    <div id="dead-card-wrap"></div>
+    <div class="turn-timer" id="turn-timer" hidden></div>
+  </div>
+  <div class="shoutout" id="shoutout" hidden>
+    <div class="shoutout-card" id="shoutout-card"></div>
+    <div class="shoutout-text" id="shoutout-text"></div>
   </div>
   <div id="board-wrap">
     <canvas id="board-canvas"></canvas>
@@ -73,7 +77,7 @@
   <div class="hand-tray">
     <div class="hand-scroller" id="hand-scroller"></div>
     <div class="hand-footer">
-      <span class="hint" id="hand-hint">Tap a card, then tap a highlighted space</span>
+      <span class="hint" id="hand-hint">Tap a card in your hand to play it</span>
       <button class="btn secondary" id="btn-dead-card" hidden>No plays — swap card</button>
     </div>
   </div>

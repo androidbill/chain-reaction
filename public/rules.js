@@ -46,6 +46,27 @@ export function isDeadCard(board, instanceId, lockedIndices) {
   return targets.length === 0;
 }
 
+// The set of board cells worth highlighting just from glancing at a hand —
+// every normal card's exact spot, plus removable targets for any one-eyed
+// jack. Two-eyed (wild) jacks are deliberately excluded: a wild can go on
+// literally any empty cell, so highlighting all of them would just flood
+// the board instead of being useful — the player selects the wild card
+// itself and then taps wherever they want.
+export function ambientHighlightSet(board, hand, lockedIndices) {
+  const locked = lockedIndices || new Set();
+  const set = new Set();
+  for (const instanceId of hand) {
+    const code = instanceCode(instanceId);
+    if (isTwoEyedJack(code)) continue;
+    const { action, targets } = legalTargetsFor(board, instanceId);
+    for (const t of targets) {
+      if (action === 'remove' && locked.has(t)) continue;
+      set.add(t);
+    }
+  }
+  return set;
+}
+
 export function validateMove(board, instanceId, targetIndex, lockedIndices) {
   const { action, targets } = legalTargetsFor(board, instanceId);
   if (!targets.includes(targetIndex)) {

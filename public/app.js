@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, runTransaction,
+  getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, runTransaction, serverTimestamp,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 import { firebaseConfig } from './firebase-config.js';
@@ -11,6 +11,7 @@ import {
 } from './cards.js';
 import {
   legalTargetsFor, isDeadCard, validateMove, findSequences, lockedIndicesFrom, checkWinner, nextTurnIndex,
+  ambientHighlightSet,
 } from './rules.js';
 import { BoardView, TEAM_COLOR } from './render.js';
 
@@ -19,6 +20,7 @@ const db = getFirestore(fbApp);
 
 const $ = (id) => document.getElementById(id);
 const TEAM_NAMES = ['Red', 'Blue', 'Green'];
+const TURN_SECONDS = 30;
 
 // ---------------- Player identity ----------------
 let playerId = localStorage.getItem('cr_player_id');
@@ -35,6 +37,9 @@ let unsubRoom = null;
 let room = null; // last snapshot data
 let selectedInstanceId = null;
 let boardView = null;
+let lastSeenMoveTs = undefined; // undefined = not initialized yet for this room
+let timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
+let timerIntervalId = null;
 let deferredInstallPrompt = null;
 
 // ---------------- Small helpers ----------------
@@ -191,11 +196,15 @@ $('kebab-pause').addEventListener('click', async () => {
   closeKebab();
   if (!room || !roomRef) return;
   const next = !room.paused;
-  await updateDoc(roomRef, { paused: next, pausedBy: next ? playerId : null }).catch(() => toast('Could not update pause state'));
+  const patch = { paused: next, pausedBy: next ? playerId : null };
+  // Resuming gives the current player a fresh 30s rather than trying to
+  // account for time spent paused — simpler and avoids clock-skew math.
+  if (!next) patch['game.turnStartedAt'] = serverTimestamp();
+  await updateDoc(roomRef, patch).catch(() => toast('Could not update pause state'));
 });
 $('btn-resume-game').addEventListener('click', async () => {
   if (!room || !roomRef) return;
-  await updateDoc(roomRef, { paused: false, pausedBy: null }).catch(() => toast('Could not resume'));
+  await updateDoc(roomRef, { paused: false, pausedBy: null, 'game.turnStartedAt': serverTimestamp() }).catch(() => toast('Could not resume'));
 });
 $('kebab-restart').addEventListener('click', async () => {
   closeKebab();
@@ -299,6 +308,7 @@ async function joinRoom(code) {
 function enterRoom(code) {
   roomCode = code;
   roomRef = doc(db, 'rooms', code);
+  lastSeenMoveTs = undefined;
   localStorage.setItem('cr_room', code);
   if (unsubRoom) unsubRoom();
   unsubRoom = onSnapshot(roomRef, (snap) => {
@@ -319,6 +329,7 @@ function leaveRoom() {
   roomCode = null;
   room = null;
   selectedInstanceId = null;
+  stopTurnTimer();
   localStorage.removeItem('cr_room');
   showScreen('screen-home');
 }
@@ -412,6 +423,8 @@ function dealNewGame(order, teamCount) {
     currentPlayerId: order[0],
     turnIndex: 0,
     winnerTeam: null,
+    lastMove: null,
+    turnStartedAt: serverTimestamp(),
   };
 }
 
@@ -438,9 +451,19 @@ function renderGame() {
   const sequences = findSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
   let highlight = new Set();
-  if (isMyTurn() && selectedInstanceId) {
-    const { targets } = legalTargetsFor(game.board, selectedInstanceId);
-    highlight = new Set(targets);
+  if (isMyTurn()) {
+    if (selectedInstanceId) {
+      // A selected wild jack can go on any empty cell — highlighting all of
+      // them would just flood the board, so show nothing and let the player
+      // tap wherever they want (validateMove still allows any empty cell).
+      if (!isTwoEyedJack(instanceCode(selectedInstanceId))) {
+        const { targets } = legalTargetsFor(game.board, selectedInstanceId);
+        highlight = new Set(targets);
+      }
+    } else {
+      const hand = game.hands[playerId] || [];
+      highlight = ambientHighlightSet(game.board, hand, locked);
+    }
   }
   boardView.setState({ board: game.board, highlight, locked, myTeam: myTeam() });
 
@@ -457,6 +480,14 @@ function renderGame() {
     turnBanner.innerHTML = `<span class="team-dot" style="background:${TEAM_COLOR[curPlayer.team]}"></span> Paused`;
   } else {
     turnBanner.innerHTML = `<span class="team-dot" style="background:${TEAM_COLOR[curPlayer.team]}"></span> ${curPlayer.name}'s turn`;
+  }
+
+  updateTurnTimer(game);
+
+  if (game.lastMove && game.lastMove.ts !== lastSeenMoveTs) {
+    const isFirstLoad = lastSeenMoveTs === undefined;
+    lastSeenMoveTs = game.lastMove.ts;
+    if (!isFirstLoad) showShoutout(game.lastMove);
   }
 
   const pauseOverlay = $('pause-overlay');
@@ -480,16 +511,16 @@ function renderHand() {
   const sequences = findSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
 
-  let anyDead = false;
   for (const instanceId of hand) {
     const code = instanceCode(instanceId);
     const card = document.createElement('div');
     card.className = 'hand-card';
     if (SUIT_COLOR[cardSuit(code)] === 'red') card.classList.add('red');
     if (instanceId === selectedInstanceId) card.classList.add('selected');
+    if (isMyTurn() && isDeadCard(game.board, instanceId, locked)) card.classList.add('dead');
+    if (isTwoEyedJack(code)) card.classList.add('jack-wild');
+    else if (isOneEyedJack(code)) card.classList.add('jack-remove');
     card.innerHTML = `<div class="r">${cardRank(code)}</div><div class="s">${SUIT_SYMBOL[cardSuit(code)]}</div>`;
-    const dead = isMyTurn() && isDeadCard(game.board, instanceId, locked);
-    if (dead) anyDead = anyDead || instanceId === selectedInstanceId ? anyDead : anyDead;
     card.addEventListener('click', () => onHandCardTap(instanceId));
     scroller.appendChild(card);
   }
@@ -504,14 +535,17 @@ function renderHand() {
     } else {
       const code = instanceCode(selectedInstanceId);
       hint.textContent = isTwoEyedJack(code)
-        ? 'Wild! Tap any highlighted space.'
+        ? 'Wild! Tap anywhere on the board to place your chip.'
         : isOneEyedJack(code)
         ? 'Tap an opponent chip to remove it.'
-        : 'Tap a highlighted space to place your chip.';
+        : 'Tap the highlighted space to place your chip.';
       deadBtn.hidden = true;
     }
   } else if (isMyTurn()) {
-    hint.textContent = 'Tap a card, then tap a highlighted space';
+    const anyPlay = hand.some((id) => !isDeadCard(game.board, id, locked));
+    hint.textContent = anyPlay
+      ? 'Tap a card in your hand to play it'
+      : 'No plays available — tap a card to swap it';
     deadBtn.hidden = true;
   } else {
     hint.textContent = 'Waiting for your turn…';
@@ -573,6 +607,15 @@ async function applyMove(instanceId, targetIndex, action) {
       const order = data.order;
       const turnIndex = nextTurnIndex(game.turnIndex, order.length);
       const currentPlayerId = winnerTeam == null ? order[turnIndex] : game.currentPlayerId;
+      const lastMove = {
+        type: 'card',
+        playerId: myPid,
+        name: data.players[myPid].name,
+        code: instanceCode(instanceId),
+        action: check.action,
+        targetIndex,
+        ts: Date.now(),
+      };
 
       tx.update(roomRef, {
         'game.board': board,
@@ -582,7 +625,8 @@ async function applyMove(instanceId, targetIndex, action) {
         'game.turnIndex': winnerTeam == null ? turnIndex : game.turnIndex,
         'game.currentPlayerId': currentPlayerId,
         'game.winnerTeam': winnerTeam,
-        ...(winnerTeam != null ? { state: 'finished' } : {}),
+        'game.lastMove': lastMove,
+        ...(winnerTeam == null ? { 'game.turnStartedAt': serverTimestamp() } : { state: 'finished' }),
       });
     });
     selectedInstanceId = null;
@@ -619,12 +663,111 @@ async function applyDeadCardSwap(instanceId) {
         'game.deck': deck,
         'game.turnIndex': turnIndex,
         'game.currentPlayerId': order[turnIndex],
+        'game.turnStartedAt': serverTimestamp(),
       });
     });
     selectedInstanceId = null;
   } catch (e) {
     toast('Could not swap card');
   }
+}
+
+// A server-timestamped turnStartedAt (not any device's local clock) is the
+// source of truth for the 30s turn timer — this is the same clock-skew
+// lesson from the other apps: iPhones (and everything else) can't be
+// trusted to agree with each other, only the server's clock is shared.
+// Every connected client independently notices when time is up and tries
+// this transaction; the guard on turnStartedAt makes it a safe no-op for
+// every attempt after the first one that actually lands.
+async function attemptTurnTimeout(expectedStartedAtMillis) {
+  if (!roomRef) return;
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(roomRef);
+      if (!snap.exists()) return;
+      const data = snap.data();
+      const game = data.game;
+      if (!game || data.paused || data.state !== 'playing') return;
+      const startedAt = game.turnStartedAt;
+      if (!startedAt || startedAt.toMillis() !== expectedStartedAtMillis) return;
+      const order = data.order;
+      const timedOutPlayer = data.players[game.currentPlayerId];
+      const turnIndex = nextTurnIndex(game.turnIndex, order.length);
+      tx.update(roomRef, {
+        'game.turnIndex': turnIndex,
+        'game.currentPlayerId': order[turnIndex],
+        'game.turnStartedAt': serverTimestamp(),
+        'game.lastMove': { type: 'timeout', name: timedOutPlayer ? timedOutPlayer.name : 'A player', ts: Date.now() },
+      });
+    });
+  } catch (e) { /* another client already handled it — fine */ }
+}
+
+function stopTurnTimer() {
+  if (timerIntervalId) { clearInterval(timerIntervalId); timerIntervalId = null; }
+  timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
+  $('turn-timer').hidden = true;
+}
+
+function updateTurnTimer(game) {
+  if (!game || room.state !== 'playing' || room.paused || !game.turnStartedAt) {
+    stopTurnTimer();
+    return;
+  }
+  const startedAtMillis = game.turnStartedAt.toMillis();
+  if (timerState.startedAtMillis !== startedAtMillis) {
+    timerState = { startedAtMillis, perfAtReceipt: performance.now(), wallAtReceipt: Date.now(), timedOutFired: false };
+  }
+  $('turn-timer').hidden = false;
+  if (!timerIntervalId) timerIntervalId = setInterval(tickTurnTimer, 250);
+  tickTurnTimer();
+}
+
+function tickTurnTimer() {
+  const { startedAtMillis, wallAtReceipt, perfAtReceipt } = timerState;
+  if (startedAtMillis == null) return;
+  // Elapsed time = (gap between server turn-start and when we anchored it,
+  // per our own clock) + (monotonic time since anchoring). The one-time
+  // wall-clock read only sets the starting offset; performance.now() never
+  // jumps, so a skewed or drifting device clock can't desync the countdown
+  // mid-turn — only the very first reading depends on the local clock at all.
+  const elapsed = (wallAtReceipt - startedAtMillis) + (performance.now() - perfAtReceipt);
+  const remainingMs = TURN_SECONDS * 1000 - elapsed;
+  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
+  const el = $('turn-timer');
+  el.textContent = `⏱ ${seconds}s`;
+  el.classList.toggle('low', seconds <= 10);
+  if (remainingMs <= 0 && !timerState.timedOutFired) {
+    timerState.timedOutFired = true;
+    attemptTurnTimeout(startedAtMillis);
+  }
+}
+
+function showShoutout(move) {
+  const cardEl = $('shoutout-card');
+  if (move.type === 'timeout') {
+    cardEl.className = 'shoutout-card';
+    cardEl.innerHTML = '<div class="s">&#9203;</div>';
+    $('shoutout-text').textContent = `${move.name}'s time ran out!`;
+  } else {
+    const rank = cardRank(move.code);
+    const suit = cardSuit(move.code);
+    cardEl.className = 'shoutout-card' + (SUIT_COLOR[suit] === 'red' ? ' red' : '');
+    cardEl.innerHTML = `<div class="r">${rank}</div><div class="s">${SUIT_SYMBOL[suit]}</div>`;
+    const verb = isTwoEyedJack(move.code)
+      ? 'played a WILD card!'
+      : isOneEyedJack(move.code)
+      ? 'removed a chip!'
+      : 'played a card!';
+    $('shoutout-text').textContent = `${move.name} ${verb}`;
+  }
+  const el = $('shoutout');
+  el.hidden = false;
+  el.classList.remove('show');
+  void el.offsetWidth; // restart the transition if one is already showing
+  el.classList.add('show');
+  clearTimeout(showShoutout._t);
+  showShoutout._t = setTimeout(() => { el.classList.remove('show'); }, 2600);
 }
 
 function showWinOverlay(winnerTeam) {

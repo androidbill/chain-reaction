@@ -67,27 +67,69 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
 .game-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; padding-top: calc(10px + var(--safe-t)); background: var(--panel); border-bottom: 1px solid var(--line); z-index: 20; }
 .turn-banner { font-weight: 700; font-size: 14.5px; }
 .turn-banner .team-dot { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+.turn-timer {
+  font-weight: 800; font-size: 15px; font-variant-numeric: tabular-nums;
+  color: var(--text-dim); min-width: 34px; text-align: right;
+}
+.turn-timer.low { color: var(--team-0); }
 #board-wrap { flex: 1; position: relative; overflow: hidden; background: #0a0e17; }
 #board-canvas { display: block; width: 100%; height: 100%; }
 .zoom-controls { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 8px; z-index: 15; }
 .zoom-controls button { width: 40px; height: 40px; border-radius: 50%; background: rgba(20,26,38,0.85); border: 1px solid var(--line); color: var(--text); font-size: 20px; }
 
 .hand-tray { background: var(--panel); border-top: 1px solid var(--line); padding: 10px 12px calc(10px + var(--safe-b)); display: flex; flex-direction: column; gap: 8px; }
-.hand-scroller { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 2px; }
+/* Every hand is at most 7 cards (2-team game) — size cards to always fit
+   the tray width with no scrolling, instead of a fixed size + overflow. */
+.hand-scroller { display: flex; gap: min(1.6vw, 8px); justify-content: center; }
 .hand-card {
-  flex: 0 0 auto; width: 52px; height: 74px; border-radius: 8px; background: #f4efe4;
+  flex: 1 1 0; max-width: 62px; min-width: 0; aspect-ratio: 0.72; border-radius: 8px; background: #f4efe4;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   border: 2px solid transparent; font-weight: 700; color: #22262e;
 }
 .hand-card.red { color: #b8302a; }
-.hand-card .r { font-size: 17px; }
-.hand-card .s { font-size: 19px; }
-.hand-card.selected { border-color: var(--accent); transform: translateY(-6px); }
+.hand-card .r { font-size: clamp(11px, 4.6vw, 17px); }
+.hand-card .s { font-size: clamp(12px, 5.2vw, 19px); }
+.hand-card.selected, .hand-card.selected.red {
+  background: var(--accent); border-color: var(--accent); color: #14161c;
+  transform: translateY(-6px); box-shadow: 0 6px 16px rgba(255, 214, 51, 0.5);
+}
+.hand-card.dead { opacity: 0.45; }
+.hand-card.jack-wild:not(.dead):not(.selected) { animation: pulse-blue 1.4s ease-in-out infinite; }
+.hand-card.jack-remove:not(.dead):not(.selected) { animation: pulse-red 1.4s ease-in-out infinite; }
+@keyframes pulse-blue {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 127, 224, 0.55); }
+  50% { box-shadow: 0 0 0 7px rgba(59, 127, 224, 0); }
+}
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(224, 71, 60, 0.55); }
+  50% { box-shadow: 0 0 0 7px rgba(224, 71, 60, 0); }
+}
 .hand-footer { display: flex; align-items: center; justify-content: space-between; }
 .hand-footer .hint { color: var(--text-dim); font-size: 13px; }
 
 .win-overlay { position: fixed; inset: 0; background: rgba(10,14,23,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 100; text-align: center; padding: 24px; }
 .win-overlay h2 { font-size: 30px; margin: 0; }
+
+/* ---------- Shoutout banner ---------- */
+.shoutout {
+  position: absolute; top: 8px; left: 50%; z-index: 40;
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(15, 20, 32, 0.95); border: 1px solid var(--line); border-radius: 14px;
+  padding: 8px 16px 8px 8px; box-shadow: 0 10px 26px rgba(0,0,0,0.5);
+  opacity: 0; pointer-events: none;
+  transform: translate(-50%, -16px);
+  transition: opacity .25s ease, transform .25s ease;
+}
+.shoutout.show { opacity: 1; transform: translate(-50%, 0); }
+.shoutout-card {
+  flex: 0 0 auto; width: 34px; aspect-ratio: 0.72; border-radius: 6px; background: #f4efe4;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  font-weight: 700; color: #22262e;
+}
+.shoutout-card.red { color: #b8302a; }
+.shoutout-card .r { font-size: 12px; }
+.shoutout-card .s { font-size: 13px; }
+.shoutout-text { font-weight: 700; font-size: 14px; white-space: nowrap; }
 
 /* ---------- Kebab menu ---------- */
 .kebab-wrap { position: fixed; top: calc(var(--safe-t) + 10px); right: 12px; z-index: 70; }

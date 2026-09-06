@@ -7,6 +7,7 @@ import {
   findSequences,
   lockedIndicesFrom,
   checkWinner,
+  ambientHighlightSet,
 } from '../public/rules.js';
 import { boardIndicesFor, CORNER_INDICES } from '../public/cards.js';
 
@@ -100,6 +101,29 @@ function emptyBoard() {
   for (const c of [1, 2, 3, 4]) board3[c] = 2; // one sequence for team 2 (of 3)
   seqs = findSequences(board3, 3);
   assert.equal(checkWinner(seqs, 3), 2);
+}
+
+// 9. ambientHighlightSet: whole-hand awareness highlight, excluding wilds.
+{
+  const board = emptyBoard();
+  const spots7H = boardIndicesFor('7H');
+  const spots3D = boardIndicesFor('3D');
+  const hand = ['7H#0', '3D#0', 'JH#0']; // normal, normal, two-eyed wild
+  const set = ambientHighlightSet(board, hand, new Set());
+  for (const i of spots7H) assert.ok(set.has(i));
+  for (const i of spots3D) assert.ok(set.has(i));
+  // The wild does NOT flood the board with every empty cell.
+  const wildOnlyCell = 50;
+  assert.ok(!spots7H.includes(wildOnlyCell) && !spots3D.includes(wildOnlyCell));
+  assert.equal(set.has(wildOnlyCell), false);
+
+  // One-eyed jack: removable opponent chips are included, locked ones are not.
+  const board2 = emptyBoard();
+  board2[15] = 1;
+  board2[16] = 1;
+  const set2 = ambientHighlightSet(board2, ['JS#0'], new Set([16]));
+  assert.ok(set2.has(15));
+  assert.equal(set2.has(16), false);
 }
 
 console.log('All rules.js tests passed.');

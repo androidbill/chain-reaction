@@ -62,6 +62,7 @@
     <div class="turn-banner" id="turn-banner">—</div>
     <div class="turn-timer" id="turn-timer" hidden></div>
   </div>
+  <div class="players-strip" id="players-strip"></div>
   <div class="shoutout" id="shoutout" hidden>
     <div class="shoutout-card" id="shoutout-card"></div>
     <div class="shoutout-text" id="shoutout-text"></div>
@@ -87,9 +88,24 @@
   </div>
 </div>
 
-<div class="win-overlay" id="win-overlay" hidden>
+<div class="win-overlay stats-overlay" id="win-overlay" hidden>
   <h2 id="win-title">🎉 Team wins!</h2>
-  <button class="btn" id="btn-win-home">Back to Home</button>
+  <p class="stats-duration" id="stats-duration"></p>
+  <div class="stats-scroll">
+    <div class="stats-section">
+      <h4>Lines completed</h4>
+      <div id="stats-lines"></div>
+    </div>
+    <div class="stats-section">
+      <h4>Cards played</h4>
+      <div id="stats-players"></div>
+    </div>
+  </div>
+  <p class="stats-votes" id="stats-votes"></p>
+  <div class="sheet-actions">
+    <button class="btn secondary" id="btn-quit-game">Quit</button>
+    <button class="btn" id="btn-play-again">Play Again</button>
+  </div>
 </div>
 
 <div class="win-overlay" id="pause-overlay" hidden>

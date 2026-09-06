@@ -11,7 +11,7 @@ import {
 } from './cards.js';
 import {
   isDeadCard, validateMove, findSequences, lockedIndicesFrom, checkWinner, nextTurnIndex,
-  ambientHighlightSet, autoResolveTargets,
+  ambientHighlightSet, autoResolveTargets, countSequencesByTeam,
 } from './rules.js';
 import { BoardView, TEAM_COLOR } from './render.js';
 
@@ -354,6 +354,7 @@ function enterRoom(code) {
   roomRef = doc(db, 'rooms', code);
   lastSeenMoveTs = undefined;
   wasMyTurn = undefined;
+  lastVotesSignature = null;
   localStorage.setItem('cr_room', code);
   if (unsubRoom) unsubRoom();
   unsubRoom = onSnapshot(roomRef, (snap) => {
@@ -379,7 +380,6 @@ function leaveRoom() {
   showScreen('screen-home');
 }
 $('btn-leave-lobby').addEventListener('click', leaveRoom);
-$('btn-win-home').addEventListener('click', () => { $('win-overlay').hidden = true; leaveRoom(); });
 
 // ---------------- Room state -> screens ----------------
 function applyRoom() {
@@ -470,6 +470,11 @@ function dealNewGame(order, teamCount) {
     winnerTeam: null,
     lastMove: null,
     turnStartedAt: serverTimestamp(),
+    startedAt: serverTimestamp(),
+    finishedAt: null,
+    completedLines: [],
+    stats: {},
+    playAgainVotes: {},
   };
 }
 
@@ -487,6 +492,42 @@ function myTeam() {
 }
 function isMyTurn() {
   return room.game && !room.paused && room.game.currentPlayerId === playerId && room.state === 'playing';
+}
+
+// A persistent strip showing every player's team and how many lines their
+// team has completed so far — the shoutout is a one-off notice, this is
+// the "up by their name" running record the user also asked for.
+function renderPlayersStrip(sequences, teamCount) {
+  const strip = $('players-strip');
+  strip.innerHTML = '';
+  const counts = countSequencesByTeam(sequences, teamCount);
+  const needed = sequencesNeededToWin(teamCount);
+  const order = (room.order && room.order.length ? room.order : Object.keys(room.players));
+  for (const pid of order) {
+    const p = room.players[pid];
+    if (!p) continue;
+    const chip = document.createElement('div');
+    chip.className = 'player-chip';
+    const dot = document.createElement('span');
+    dot.className = 'team-dot';
+    dot.style.background = TEAM_COLOR[p.team] || '#888';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = p.name;
+    const pips = document.createElement('span');
+    const have = counts[p.team] || 0;
+    for (let i = 0; i < needed; i++) {
+      const pip = document.createElement('span');
+      pip.className = 'pip';
+      pip.style.background = i < have ? TEAM_COLOR[p.team] : 'transparent';
+      pip.style.border = `1px solid ${TEAM_COLOR[p.team] || '#888'}`;
+      pips.appendChild(pip);
+    }
+    chip.appendChild(dot);
+    chip.appendChild(name);
+    chip.appendChild(pips);
+    strip.appendChild(chip);
+  }
 }
 
 function renderGame() {
@@ -510,6 +551,7 @@ function renderGame() {
     highlight = ambientHighlightSet(game.board, hand, locked);
   }
   boardView.setState({ board: displayBoard, highlight, locked, myTeam: myTeam() });
+  renderPlayersStrip(sequences, teamCount);
 
   const turnBanner = $('turn-banner');
   const curPid = game.currentPlayerId;
@@ -719,13 +761,40 @@ async function applyMove(instanceId, targetIndex, action) {
       const order = data.order;
       const turnIndex = nextTurnIndex(game.turnIndex, order.length);
       const currentPlayerId = winnerTeam == null ? order[turnIndex] : game.currentPlayerId;
+      const code = instanceCode(instanceId);
+
+      // Track per-player stats (wilds/removals/cards played) for the
+      // end-of-game summary.
+      const prevStats = (game.stats && game.stats[myPid]) || { wildsPlayed: 0, removalsPlayed: 0, cardsPlayed: 0 };
+      const stats = {
+        ...game.stats,
+        [myPid]: {
+          wildsPlayed: prevStats.wildsPlayed + (isTwoEyedJack(code) ? 1 : 0),
+          removalsPlayed: prevStats.removalsPlayed + (isOneEyedJack(code) ? 1 : 0),
+          cardsPlayed: prevStats.cardsPlayed + 1,
+        },
+      };
+
+      // Did this move complete one or more new sequences for the mover's
+      // team? findSequences already resolves overlap so this reflects
+      // legitimately distinct lines, not just any run of 5.
+      const countBefore = countSequencesByTeam(sequencesBefore, teamCount)[team];
+      const countAfter = countSequencesByTeam(sequences, teamCount)[team];
+      const completedLines = (game.completedLines || []).slice();
+      let completedLine = null;
+      for (let ord = countBefore + 1; ord <= countAfter; ord++) {
+        completedLines.push({ team, playerId: myPid, playerName: data.players[myPid].name, ordinal: ord, ts: Date.now() });
+        completedLine = ord;
+      }
+
       const lastMove = {
         type: 'card',
         playerId: myPid,
         name: data.players[myPid].name,
-        code: instanceCode(instanceId),
+        code,
         action: check.action,
         targetIndex,
+        completedLine,
         ts: Date.now(),
       };
 
@@ -738,7 +807,9 @@ async function applyMove(instanceId, targetIndex, action) {
         'game.currentPlayerId': currentPlayerId,
         'game.winnerTeam': winnerTeam,
         'game.lastMove': lastMove,
-        ...(winnerTeam == null ? { 'game.turnStartedAt': serverTimestamp() } : { state: 'finished' }),
+        'game.stats': stats,
+        'game.completedLines': completedLines,
+        ...(winnerTeam == null ? { 'game.turnStartedAt': serverTimestamp() } : { state: 'finished', 'game.finishedAt': serverTimestamp() }),
       });
     });
   } catch (e) {
@@ -853,12 +924,28 @@ function tickTurnTimer() {
   }
 }
 
+function ordinal(n) {
+  if (n === 1) return '1st';
+  if (n === 2) return '2nd';
+  if (n === 3) return '3rd';
+  return n + 'th';
+}
+
 function showShoutout(move) {
   const cardEl = $('shoutout-card');
+  let duration = 2600;
   if (move.type === 'timeout') {
     cardEl.className = 'shoutout-card';
     cardEl.innerHTML = '<div class="s">&#9203;</div>';
     $('shoutout-text').textContent = `${move.name}'s time ran out!`;
+  } else if (move.completedLine) {
+    // A completed line is bigger news than the card that caused it, so it
+    // replaces the regular "played a card" shoutout rather than queuing
+    // behind it, and stays up a bit longer.
+    cardEl.className = 'shoutout-card';
+    cardEl.innerHTML = '<div class="s">&#127942;</div>';
+    $('shoutout-text').textContent = `${move.name} completed their ${ordinal(move.completedLine)} line!`;
+    duration = 3400;
   } else {
     const rank = cardRank(move.code);
     const suit = cardSuit(move.code);
@@ -877,16 +964,92 @@ function showShoutout(move) {
   void el.offsetWidth; // restart the transition if one is already showing
   el.classList.add('show');
   clearTimeout(showShoutout._t);
-  showShoutout._t = setTimeout(() => { el.classList.remove('show'); }, 2600);
+  showShoutout._t = setTimeout(() => { el.classList.remove('show'); }, duration);
 }
 
+function formatDuration(ms) {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+let lastVotesSignature = null;
 function showWinOverlay(winnerTeam) {
   const overlay = $('win-overlay');
-  if (overlay.dataset.shownFor === String(winnerTeam)) return;
-  overlay.dataset.shownFor = String(winnerTeam);
+  const game = room.game;
   $('win-title').textContent = `🎉 Team ${TEAM_NAMES[winnerTeam]} wins!`;
+
+  const durationEl = $('stats-duration');
+  durationEl.textContent = (game.startedAt && game.finishedAt && game.startedAt.toMillis && game.finishedAt.toMillis)
+    ? `Game length: ${formatDuration(game.finishedAt.toMillis() - game.startedAt.toMillis())}`
+    : '';
+
+  const order = room.order && room.order.length ? room.order : Object.keys(room.players);
+
+  const linesEl = $('stats-lines');
+  const lines = game.completedLines || [];
+  linesEl.innerHTML = lines.length === 0
+    ? '<p style="color:var(--text-dim);margin:0;">No completed lines recorded.</p>'
+    : lines.map((line) => `
+        <div class="stats-line-row">
+          <span><span class="team-dot" style="background:${TEAM_COLOR[line.team]}"></span>${line.playerName}</span>
+          <span>${ordinal(line.ordinal)} line</span>
+        </div>`).join('');
+
+  const playersEl = $('stats-players');
+  playersEl.innerHTML = order.filter((pid) => room.players[pid]).map((pid) => {
+    const p = room.players[pid];
+    const s = (game.stats && game.stats[pid]) || { wildsPlayed: 0, removalsPlayed: 0, cardsPlayed: 0 };
+    return `
+      <div class="stats-player-row">
+        <span><span class="team-dot" style="background:${TEAM_COLOR[p.team]}"></span>${p.name}</span>
+        <span class="counts">${s.cardsPlayed} cards · ${s.wildsPlayed} wild · ${s.removalsPlayed} removal</span>
+      </div>`;
+  }).join('');
+
+  const votes = game.playAgainVotes || {};
+  const votedCount = order.filter((pid) => votes[pid]).length;
+  const iVoted = !!votes[playerId];
+  $('stats-votes').textContent = votedCount > 0 ? `${votedCount} of ${order.length} agreed to play again` : 'Everyone must agree to play again';
+  $('btn-play-again').textContent = iVoted ? 'Waiting for others…' : 'Play Again';
+  $('btn-play-again').disabled = iVoted;
+
   overlay.hidden = false;
+
+  const signature = order.filter((pid) => votes[pid]).sort().join(',');
+  if (signature !== lastVotesSignature) {
+    lastVotesSignature = signature;
+    maybeStartNextGame();
+  }
 }
+
+// Any client may notice a vote change and check for consensus — the
+// transaction's own "already moved on" guard makes redundant attempts
+// (including everyone piling in at once) harmless no-ops.
+async function maybeStartNextGame() {
+  if (!roomRef) return;
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(roomRef);
+      if (!snap.exists()) return;
+      const data = snap.data();
+      if (data.state !== 'finished') return;
+      const votes = (data.game && data.game.playAgainVotes) || {};
+      const order = data.order && data.order.length ? data.order : Object.keys(data.players);
+      const allVoted = order.length > 0 && order.every((pid) => votes[pid]);
+      if (!allVoted) return;
+      const game = dealNewGame(order, data.settings.teamCount);
+      tx.update(roomRef, { state: 'playing', paused: false, pausedBy: null, game });
+    });
+  } catch (e) { /* lost the race or votes incomplete — fine */ }
+}
+
+$('btn-play-again').addEventListener('click', async () => {
+  if (!room || !roomRef) return;
+  await updateDoc(roomRef, { [`game.playAgainVotes.${playerId}`]: true }).catch(() => toast('Could not register vote'));
+});
+$('btn-quit-game').addEventListener('click', () => { $('win-overlay').hidden = true; leaveRoom(); });
 
 // ---------------- Boot ----------------
 watchPublishedVersion();

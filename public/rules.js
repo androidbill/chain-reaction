@@ -125,9 +125,22 @@ function cellOwnedBy(board, index, team) {
   return isCorner(index) || board[index] === team;
 }
 
-// Returns an array of { team, cells:[5 indices] } for every run of 5 found.
+function sharedCellCount(a, b) {
+  let n = 0;
+  for (const x of a) if (b.includes(x)) n++;
+  return n;
+}
+
+// Returns an array of { team, cells:[5 indices] } for every DISTINCT run of
+// 5 a team has completed. Per the real rules, a chip may be shared by at
+// most one other sequence — so two candidate runs of 5 count as separate
+// sequences only if they overlap by at most one cell (e.g. a plain 6-in-a-
+// row is one sequence plus one spare chip, not two sequences). Candidates
+// are scanned in a fixed board order so every client resolves the same
+// board state to the same confirmed set, which multiplayer consistency
+// depends on since there's no stored history of formation order.
 export function findSequences(board, teamCount) {
-  const found = [];
+  const candidates = [];
   const seen = new Set();
   for (let team = 0; team < teamCount; team++) {
     for (const [dr, dc] of DIRECTIONS) {
@@ -150,16 +163,26 @@ export function findSequences(board, teamCount) {
         const key = team + ':' + cells.slice().sort((a, b) => a - b).join(',');
         if (seen.has(key)) continue;
         seen.add(key);
-        found.push({ team, cells });
+        candidates.push({ team, cells });
       }
     }
   }
-  return found;
+
+  const confirmed = [];
+  for (let team = 0; team < teamCount; team++) {
+    const chosenForTeam = [];
+    for (const cand of candidates) {
+      if (cand.team !== team) continue;
+      const overlapsTooMuch = chosenForTeam.some((c) => sharedCellCount(c.cells, cand.cells) > 1);
+      if (!overlapsTooMuch) chosenForTeam.push(cand);
+    }
+    confirmed.push(...chosenForTeam);
+  }
+  return confirmed;
 }
 
 // A chip is "locked" (immune to one-eyed-jack removal) once it's part of a
-// completed sequence — a cell can be reused across at most 2 sequences per
-// the real rules, but for v1 we lock any cell that appears in any sequence.
+// confirmed sequence.
 export function lockedIndicesFrom(sequences) {
   const set = new Set();
   for (const seq of sequences) {

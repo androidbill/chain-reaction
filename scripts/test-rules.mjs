@@ -139,4 +139,20 @@ function emptyBoard() {
   assert.equal(map.get(wildOnlyCell).instanceId, 'JH#0'); // wild fills in as fallback
 }
 
+// 11. Sequences may share at most one cell — a plain 6-in-a-row is one
+// sequence (plus a spare chip), not two overlapping ones.
+{
+  const board = emptyBoard();
+  for (const c of [2, 3, 4, 5, 6]) board[c] = 0; // 6 in a row, cols 2-6, row 0
+  const seqs = findSequences(board, 2).filter((s) => s.team === 0);
+  assert.equal(seqs.length, 1);
+
+  // But two lines sharing exactly one cell both count.
+  const board2 = emptyBoard();
+  for (const c of [1, 2, 3, 4]) board2[c] = 0; // row 0, cols 1-4 (+corner at 0)
+  for (let r = 1; r <= 4; r++) board2[r * 10 + 1] = 0; // col 1, rows 1-4, sharing only index 1
+  const seqs2 = findSequences(board2, 2).filter((s) => s.team === 0);
+  assert.equal(seqs2.length, 2);
+}
+
 console.log('All rules.js tests passed.');

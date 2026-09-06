@@ -2,6 +2,7 @@
   "name": "chain-reaction",
   "private": true,
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
     "test": "node scripts/test-rules.mjs",
     "build-icons": "node scripts/build-icons.mjs"

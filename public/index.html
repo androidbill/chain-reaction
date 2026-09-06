@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#0f1420">
+<title>Chain Reaction</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="top-banner" id="update-banner" hidden>
+  <span>A new version is available.</span>
+  <button id="update-refresh-btn">Refresh</button>
+</div>
+
+<!-- ===================== HOME ===================== -->
+<div class="screen" id="screen-home">
+  <div class="home-logo">🔗</div>
+  <div class="home-title">Chain Reaction</div>
+  <div class="home-version" id="home-version"></div>
+
+  <div class="home-card">
+    <h3>Your name</h3>
+    <input type="text" id="input-name" placeholder="Enter your name" maxlength="20">
+  </div>
+
+  <div class="home-card">
+    <h3>Start a new game</h3>
+    <div class="seg" id="team-count-seg">
+      <button data-teams="2" class="active">2 Teams</button>
+      <button data-teams="3">3 Teams</button>
+    </div>
+    <button class="btn" id="btn-create">Create Game</button>
+  </div>
+
+  <div class="home-card">
+    <h3>Join a game</h3>
+    <input type="text" id="input-code" placeholder="Room code" maxlength="5" style="text-transform:uppercase;letter-spacing:3px;text-align:center;">
+    <button class="btn secondary" id="btn-join">Join Game</button>
+  </div>
+</div>
+
+<!-- ===================== LOBBY ===================== -->
+<div class="screen" id="screen-lobby" hidden>
+  <div class="lobby-code" id="lobby-code">----</div>
+  <div class="lobby-players" id="lobby-players"></div>
+  <div class="lobby-actions">
+    <button class="btn secondary" id="btn-leave-lobby">Leave</button>
+    <button class="btn" id="btn-start-game">Start Game</button>
+  </div>
+</div>
+
+<!-- ===================== GAME ===================== -->
+<div class="screen" id="screen-game" hidden>
+  <div class="game-top">
+    <div class="turn-banner" id="turn-banner">—</div>
+    <div id="dead-card-wrap"></div>
+  </div>
+  <div id="board-wrap">
+    <canvas id="board-canvas"></canvas>
+    <div class="zoom-controls">
+      <button id="btn-zoom-in">+</button>
+      <button id="btn-zoom-out">−</button>
+      <button id="btn-zoom-reset">⤢</button>
+    </div>
+  </div>
+  <div class="hand-tray">
+    <div class="hand-scroller" id="hand-scroller"></div>
+    <div class="hand-footer">
+      <span class="hint" id="hand-hint">Tap a card, then tap a highlighted space</span>
+      <button class="btn secondary" id="btn-dead-card" hidden>No plays — swap card</button>
+    </div>
+  </div>
+</div>
+
+<div class="win-overlay" id="win-overlay" hidden>
+  <h2 id="win-title">🎉 Team wins!</h2>
+  <button class="btn" id="btn-win-home">Back to Home</button>
+</div>
+
+<!-- ===================== KEBAB MENU ===================== -->
+<div class="kebab-wrap" id="kebab-wrap" hidden>
+  <button class="kebab-btn" id="btn-kebab" aria-label="Menu" aria-haspopup="true" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="5" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="12" cy="19" r="1.9"/>
+    </svg>
+  </button>
+  <div class="kebab-menu" id="kebab-menu" hidden role="menu">
+    <button id="kebab-refresh" role="menuitem"><span>&#128260;</span>Refresh</button>
+    <button id="kebab-share" role="menuitem"><span>&#128228;</span>Share</button>
+    <button id="kebab-about" role="menuitem"><span>&#8505;&#65039;</span>About</button>
+  </div>
+</div>
+
+<!-- ===================== SHEETS ===================== -->
+<div class="sheet-backdrop" id="sheet-about" hidden>
+  <div class="sheet">
+    <div class="about-hero">
+      <img class="about-icon" src="icons/icon-192.png" width="88" height="88" alt="">
+      <div class="about-name">Chain Reaction</div>
+      <p class="about-ver" id="about-version"></p>
+      <p class="about-credit">Created by: Bill Parsons</p>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn" data-close>Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="sheet-backdrop" id="sheet-ios-install" hidden>
+  <div class="sheet">
+    <div class="about-hero">
+      <img class="about-icon" src="icons/icon-192.png" width="72" height="72" alt="">
+      <div class="about-name">Install Chain Reaction</div>
+      <p class="about-ver">Tap Share, then "Add to Home Screen"</p>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn" data-close>Got it</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

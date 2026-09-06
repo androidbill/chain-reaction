@@ -1,0 +1,18 @@
+{
+  "id": "/chain-reaction/",
+  "name": "Chain Reaction",
+  "short_name": "Chain Reaction",
+  "description": "Race to build sequences on the board. Online multiplayer, no accounts, join by room code.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f1420",
+  "theme_color": "#0f1420",
+  "orientation": "portrait",
+  "categories": ["games", "board"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

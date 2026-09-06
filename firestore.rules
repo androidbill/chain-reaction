@@ -1,0 +1,35 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Room codes are the shared secret — you can fetch one by exact code,
+    // but never list/enumerate all rooms.
+    match /rooms/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if request.resource.data.code == code
+        && request.resource.data.keys().hasAll(['code', 'state', 'players', 'settings'])
+        && request.resource.data.state == 'lobby';
+      allow update: if resource.data.code == code
+        && request.resource.data.code == code
+        && request.resource.data.state in ['lobby', 'playing', 'finished'];
+      allow delete: if false;
+    }
+
+    // Tiny public doc the deploy workflow patches with the latest version,
+    // so clients can detect an update instantly. Low-stakes, so left
+    // world-writable like the room docs (no auth system in this app).
+    match /meta/{doc} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if doc == 'version'
+        && request.resource.data.keys().hasOnly(['version', 'at'])
+        && request.resource.data.version is string
+        && request.resource.data.version.size() <= 32;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

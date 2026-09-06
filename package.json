@@ -1,0 +1,12 @@
+{
+  "name": "chain-reaction",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node scripts/test-rules.mjs",
+    "build-icons": "node scripts/build-icons.mjs"
+  },
+  "devDependencies": {
+    "sharp": "^0.33.4"
+  }
+}

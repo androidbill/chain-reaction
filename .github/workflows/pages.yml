@@ -1,0 +1,39 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Publish the version for live clients
+        run: |
+          VERSION=$(grep -oE "APP_VERSION = '[^']+'" public/version.js | grep -oE "[0-9][0-9.]+")
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          printf '{"fields":{"version":{"stringValue":"%s"},"at":{"timestampValue":"%s"}}}' "$VERSION" "$NOW" > version.json
+          curl -sS -X PATCH -H "Content-Type: application/json" --data @version.json -o response.json -w 'firestore: %{http_code}\n' \
+            "https://firestore.googleapis.com/v1/projects/chain-reaction-6849/databases/(default)/documents/meta/version?key=AIzaSyBJUWrV5yMm-boOzy0NChZdskViaWWqxEo"
+          cat response.json

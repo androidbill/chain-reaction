@@ -1,6 +1,6 @@
 // Pan/zoom canvas camera + board renderer. Camera math ported from
 // HexColony's BoardView pattern (fit/toScreen/toWorld/zoomBy/clampPan).
-import { BOARD_SIZE, CELL, boardExtent, cellCenter, indexAtPoint, cardAt } from './board.js';
+import { BOARD_SIZE, CELL_W, CELL_H, boardExtent, cellCenter, indexAtPoint, cardAt } from './board.js';
 import { isCorner } from './cards.js';
 import { cardSuit, cardRank, SUIT_SYMBOL, SUIT_COLOR } from './cards.js';
 
@@ -31,8 +31,18 @@ export class BoardView {
     canvas.addEventListener('pointercancel', (e) => this._onUp(e));
     canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
 
+    // Live viewport changes (phone rotation, the mobile browser's address
+    // bar collapsing/expanding on scroll, a resized window) all need to
+    // recompute the fit — a ResizeObserver on the canvas's parent catches
+    // most of these, but window resize/orientationchange and visualViewport
+    // (the most reliable signal for mobile chrome show/hide) are added too
+    // so a stale scale/position can never get stuck after a live resize.
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(canvas.parentElement || canvas);
+    this._onWindowResize = () => this.resize();
+    window.addEventListener('resize', this._onWindowResize);
+    window.addEventListener('orientationchange', this._onWindowResize);
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', this._onWindowResize);
     this.resize();
   }
 
@@ -53,8 +63,9 @@ export class BoardView {
 
   fit() {
     const ext = boardExtent();
-    const pad = CELL * 0.6;
-    this.fitScale = Math.min(this.w / (ext.w + pad * 2), this.h / (ext.h + pad * 2));
+    const padX = CELL_W * 0.6;
+    const padY = CELL_H * 0.6;
+    this.fitScale = Math.min(this.w / (ext.w + padX * 2), this.h / (ext.h + padY * 2));
     this.scale = this.fitScale * this.userScale;
     this.cx = this.w / 2 - ((ext.minX + ext.maxX) / 2) * this.scale;
     this.cy = this.h / 2 - ((ext.minY + ext.maxY) / 2) * this.scale;
@@ -95,6 +106,13 @@ export class BoardView {
     this.oy = 0;
     this.fit();
     this.draw();
+  }
+
+  destroy() {
+    this.ro.disconnect();
+    window.removeEventListener('resize', this._onWindowResize);
+    window.removeEventListener('orientationchange', this._onWindowResize);
+    if (window.visualViewport) window.visualViewport.removeEventListener('resize', this._onWindowResize);
   }
 
   hitTest(px, py) {
@@ -186,65 +204,82 @@ export class BoardView {
   _drawCell(index) {
     const ctx = this.ctx;
     const [wx, wy] = cellCenter(index);
-    const [sx, sy] = this.toScreen(wx - CELL / 2, wy - CELL / 2);
-    const size = CELL * this.scale;
+    const [sx, sy] = this.toScreen(wx - CELL_W / 2, wy - CELL_H / 2);
+    const w = CELL_W * this.scale;
+    const h = CELL_H * this.scale;
     const corner = isCorner(index);
     const highlighted = this.highlight.has(index);
     const team = this.board[index];
+    const radius = Math.min(w, h) * 0.14;
 
     ctx.save();
     ctx.fillStyle = corner ? '#2c3547' : '#f4efe4';
     ctx.strokeStyle = 'rgba(0,0,0,0.25)';
-    ctx.lineWidth = Math.max(1, size * 0.015);
-    ctx.fillRect(sx, sy, size, size);
-    ctx.strokeRect(sx, sy, size, size);
+    ctx.lineWidth = Math.max(1, Math.min(w, h) * 0.02);
+    roundRect(ctx, sx, sy, w, h, radius);
+    ctx.fill();
+    ctx.stroke();
 
     if (highlighted) {
       ctx.fillStyle = 'rgba(255, 214, 51, 0.35)';
-      ctx.fillRect(sx, sy, size, size);
+      roundRect(ctx, sx, sy, w, h, radius);
+      ctx.fill();
       ctx.strokeStyle = '#ffd633';
-      ctx.lineWidth = Math.max(2, size * 0.05);
-      ctx.strokeRect(sx + ctx.lineWidth / 2, sy + ctx.lineWidth / 2, size - ctx.lineWidth, size - ctx.lineWidth);
+      ctx.lineWidth = Math.max(2, Math.min(w, h) * 0.06);
+      roundRect(ctx, sx + ctx.lineWidth / 2, sy + ctx.lineWidth / 2, w - ctx.lineWidth, h - ctx.lineWidth, radius);
+      ctx.stroke();
     }
 
     if (corner) {
       ctx.fillStyle = '#ffd633';
-      ctx.font = `${size * 0.34}px system-ui, sans-serif`;
+      ctx.font = `${Math.min(w, h) * 0.4}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('★', sx + size / 2, sy + size / 2);
+      ctx.fillText('★', sx + w / 2, sy + h / 2);
     } else {
       const code = cardAt(index);
-      if (code && size > 14) {
+      if (code && w > 12) {
         const suit = cardSuit(code);
         const rank = cardRank(code);
         ctx.fillStyle = SUIT_COLOR[suit] === 'red' ? '#b8302a' : '#22262e';
-        ctx.font = `700 ${size * 0.22}px system-ui, sans-serif`;
+        ctx.font = `700 ${w * 0.3}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(rank, sx + size / 2, sy + size * 0.34);
-        ctx.font = `${size * 0.26}px system-ui, sans-serif`;
-        ctx.fillText(SUIT_SYMBOL[suit], sx + size / 2, sy + size * 0.66);
+        ctx.fillText(rank, sx + w / 2, sy + h * 0.32);
+        ctx.font = `${w * 0.34}px system-ui, sans-serif`;
+        ctx.fillText(SUIT_SYMBOL[suit], sx + w / 2, sy + h * 0.68);
       }
     }
 
     if (team != null) {
+      const r = Math.min(w, h) * 0.34;
       ctx.beginPath();
-      ctx.arc(sx + size / 2, sy + size / 2, size * 0.32, 0, Math.PI * 2);
+      ctx.arc(sx + w / 2, sy + h / 2, r, 0, Math.PI * 2);
       ctx.fillStyle = TEAM_COLOR[team];
       ctx.fill();
-      ctx.lineWidth = Math.max(1, size * 0.03);
+      ctx.lineWidth = Math.max(1, Math.min(w, h) * 0.03);
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.stroke();
       if (this.locked.has(index)) {
         ctx.beginPath();
-        ctx.arc(sx + size / 2, sy + size / 2, size * 0.14, 0, Math.PI * 2);
+        ctx.arc(sx + w / 2, sy + h / 2, r * 0.42, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
         ctx.fill();
       }
     }
     ctx.restore();
   }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
 }
 
 export { TEAM_COLOR, TEAM_COLOR_SOFT };

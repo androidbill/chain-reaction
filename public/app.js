@@ -67,6 +67,10 @@ async function checkForUpdate() {
   } catch (e) { /* offline — ignore */ }
 }
 function announceUpdate() { $('update-banner').hidden = false; }
+const CORE_FILES = [
+  'index.html', 'app.js', 'board.js', 'render.js', 'cards.js', 'rules.js',
+  'firebase-config.js', 'version.js', 'styles.css', 'manifest.webmanifest',
+];
 async function fullRefresh() {
   try {
     if (window.caches) {
@@ -77,6 +81,11 @@ async function fullRefresh() {
       const regs = await navigator.serviceWorker.getRegistrations();
       await Promise.all(regs.map((r) => r.unregister()));
     }
+    // Unregistering the service worker and clearing Cache Storage doesn't
+    // touch the browser's own HTTP cache — without this, a plain reload can
+    // still load stale cached copies of these ES modules even though the
+    // server has newer ones, leaving the update banner stuck forever.
+    await Promise.all(CORE_FILES.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
   } catch (e) { /* ignore */ }
   const url = location.origin + location.pathname + '?fresh=' + Date.now();
   location.replace(url);
@@ -299,6 +308,7 @@ function applyRoom() {
   else if (room.state === 'playing' || room.state === 'finished') {
     showScreen('screen-game');
     ensureBoardView();
+    boardView.resize();
     renderGame();
     if (room.state === 'finished' && room.game && room.game.winnerTeam != null) {
       showWinOverlay(room.game.winnerTeam);

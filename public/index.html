@@ -84,6 +84,12 @@
   <button class="btn" id="btn-win-home">Back to Home</button>
 </div>
 
+<div class="win-overlay" id="pause-overlay" hidden>
+  <h2>&#9208;&#65039; Game Paused</h2>
+  <p id="pause-by-text" style="color:var(--text-dim);margin:0;"></p>
+  <button class="btn" id="btn-resume-game">Resume Game</button>
+</div>
+
 <!-- ===================== KEBAB MENU ===================== -->
 <div class="kebab-wrap" id="kebab-wrap" hidden>
   <button class="kebab-btn" id="btn-kebab" aria-label="Menu" aria-haspopup="true" aria-expanded="false">
@@ -95,6 +101,9 @@
     <button id="kebab-install" role="menuitem" hidden><span>&#8595;</span>Install App</button>
     <button id="kebab-refresh" role="menuitem"><span>&#128260;</span>Refresh</button>
     <button id="kebab-share" role="menuitem"><span>&#128228;</span>Share</button>
+    <button id="kebab-pause" role="menuitem" hidden><span>&#9208;&#65039;</span>Pause Game</button>
+    <button id="kebab-restart" role="menuitem" hidden><span>&#128260;</span>Restart Game</button>
+    <button id="kebab-leave-game" role="menuitem" hidden><span>&#128682;</span>Leave Game</button>
     <button id="kebab-about" role="menuitem"><span>&#8505;&#65039;</span>About</button>
   </div>
 </div>

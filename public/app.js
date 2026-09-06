@@ -187,6 +187,30 @@ $('kebab-about').addEventListener('click', () => {
   $('about-version').textContent = `Version ${APP_VERSION}`;
   showSheet('sheet-about');
 });
+$('kebab-pause').addEventListener('click', async () => {
+  closeKebab();
+  if (!room || !roomRef) return;
+  const next = !room.paused;
+  await updateDoc(roomRef, { paused: next, pausedBy: next ? playerId : null }).catch(() => toast('Could not update pause state'));
+});
+$('btn-resume-game').addEventListener('click', async () => {
+  if (!room || !roomRef) return;
+  await updateDoc(roomRef, { paused: false, pausedBy: null }).catch(() => toast('Could not resume'));
+});
+$('kebab-restart').addEventListener('click', async () => {
+  closeKebab();
+  if (!room || !roomRef || room.hostId !== playerId) return;
+  if (!confirm('Restart the game? Everyone gets a fresh deal.')) return;
+  const teamCount = room.settings.teamCount;
+  const order = room.order && room.order.length ? room.order : Object.keys(room.players);
+  const game = dealNewGame(order, teamCount);
+  await updateDoc(roomRef, { state: 'playing', paused: false, pausedBy: null, game }).catch(() => toast('Could not restart game'));
+});
+$('kebab-leave-game').addEventListener('click', () => {
+  closeKebab();
+  if (!confirm('Leave this game?')) return;
+  leaveRoom();
+});
 for (const el of document.querySelectorAll('[data-close]')) {
   el.addEventListener('click', (e) => { e.target.closest('.sheet-backdrop').hidden = true; });
 }
@@ -304,6 +328,7 @@ $('btn-win-home').addEventListener('click', () => { $('win-overlay').hidden = tr
 // ---------------- Room state -> screens ----------------
 function applyRoom() {
   if (!room) return;
+  updateGameKebabVisibility();
   if (room.state === 'lobby') { renderLobby(); showScreen('screen-lobby'); }
   else if (room.state === 'playing' || room.state === 'finished') {
     showScreen('screen-game');
@@ -314,6 +339,16 @@ function applyRoom() {
       showWinOverlay(room.game.winnerTeam);
     }
   }
+}
+
+function updateGameKebabVisibility() {
+  const inGame = room && (room.state === 'playing' || room.state === 'finished');
+  $('kebab-leave-game').hidden = !inGame;
+  $('kebab-restart').hidden = !inGame || room.hostId !== playerId;
+  $('kebab-pause').hidden = !inGame || room.state === 'finished';
+  $('kebab-pause').innerHTML = room.paused
+    ? '<span>&#9654;&#65039;</span>Resume Game'
+    : '<span>&#9208;&#65039;</span>Pause Game';
 }
 
 function renderLobby() {
@@ -358,13 +393,18 @@ $('btn-start-game').addEventListener('click', async () => {
     if (!teamsUsed.has(t)) { toast(`Team ${TEAM_NAMES[t]} has no players`); return; }
   }
   const order = pids.slice().sort((a, b) => room.players[a].joinedAt - room.players[b].joinedAt);
+  const game = dealNewGame(order, teamCount);
+  await updateDoc(roomRef, { state: 'playing', paused: false, pausedBy: null, order, game }).catch(() => toast('Could not start game'));
+});
+
+function dealNewGame(order, teamCount) {
   const deck = buildShuffledDeck(Date.now());
   const handSize = handSizeForTeamCount(teamCount);
   const hands = {};
   for (const pid of order) {
     hands[pid] = deck.splice(0, handSize);
   }
-  const game = {
+  return {
     deck,
     hands,
     board: new Array(100).fill(null),
@@ -373,8 +413,7 @@ $('btn-start-game').addEventListener('click', async () => {
     turnIndex: 0,
     winnerTeam: null,
   };
-  await updateDoc(roomRef, { state: 'playing', order, game }).catch(() => toast('Could not start game'));
-});
+}
 
 // ---------------- Game screen ----------------
 function ensureBoardView() {
@@ -389,7 +428,7 @@ function myTeam() {
   return room.players[playerId] ? room.players[playerId].team : 0;
 }
 function isMyTurn() {
-  return room.game && room.game.currentPlayerId === playerId && room.state === 'playing';
+  return room.game && !room.paused && room.game.currentPlayerId === playerId && room.state === 'playing';
 }
 
 function renderGame() {
@@ -408,10 +447,25 @@ function renderGame() {
   const turnBanner = $('turn-banner');
   const curPid = game.currentPlayerId;
   const curPlayer = room.players[curPid];
-  if (isMyTurn()) {
+  if (!curPlayer) {
+    // The current player left, or turn state points at someone no longer in
+    // the room — don't crash the render, just say so plainly.
+    turnBanner.textContent = 'Waiting — a player is missing. Try Restart Game.';
+  } else if (isMyTurn()) {
     turnBanner.innerHTML = `<span class="team-dot" style="background:${TEAM_COLOR[myTeam()]}"></span> Your turn`;
+  } else if (room.paused) {
+    turnBanner.innerHTML = `<span class="team-dot" style="background:${TEAM_COLOR[curPlayer.team]}"></span> Paused`;
   } else {
     turnBanner.innerHTML = `<span class="team-dot" style="background:${TEAM_COLOR[curPlayer.team]}"></span> ${curPlayer.name}'s turn`;
+  }
+
+  const pauseOverlay = $('pause-overlay');
+  if (room.paused && room.state === 'playing') {
+    const byName = (room.players[room.pausedBy] && room.players[room.pausedBy].name) || 'A player';
+    $('pause-by-text').textContent = `Paused by ${byName}`;
+    pauseOverlay.hidden = false;
+  } else {
+    pauseOverlay.hidden = true;
   }
 
   renderHand();
@@ -496,7 +550,7 @@ async function applyMove(instanceId, targetIndex, action) {
       const data = snap.data();
       const game = data.game;
       const teamCount = data.settings.teamCount;
-      if (!game || game.currentPlayerId !== myPid || data.state !== 'playing') throw new Error('not-your-turn');
+      if (!game || data.paused || game.currentPlayerId !== myPid || data.state !== 'playing') throw new Error('not-your-turn');
       const hand = game.hands[myPid] || [];
       if (!hand.includes(instanceId)) throw new Error('card-not-in-hand');
       const sequencesBefore = findSequences(game.board, teamCount);
@@ -546,7 +600,7 @@ async function applyDeadCardSwap(instanceId) {
       const data = snap.data();
       const game = data.game;
       const teamCount = data.settings.teamCount;
-      if (!game || game.currentPlayerId !== myPid || data.state !== 'playing') throw new Error('not-your-turn');
+      if (!game || data.paused || game.currentPlayerId !== myPid || data.state !== 'playing') throw new Error('not-your-turn');
       const hand = game.hands[myPid] || [];
       if (!hand.includes(instanceId)) throw new Error('card-not-in-hand');
       const sequences = findSequences(game.board, teamCount);

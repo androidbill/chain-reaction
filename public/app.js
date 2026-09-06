@@ -109,16 +109,37 @@ if ('serviceWorker' in navigator) {
 }
 
 // ---------------- Install prompts ----------------
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredInstallPrompt = e;
-});
 function isIOS() {
   return /iphone|ipad|ipod/i.test(navigator.userAgent);
 }
 function isStandalone() {
   return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 }
+function updateInstallMenuItem() {
+  $('kebab-install').hidden = isStandalone() || (!deferredInstallPrompt && !isIOS());
+}
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  updateInstallMenuItem();
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  updateInstallMenuItem();
+});
+$('kebab-install').addEventListener('click', async () => {
+  closeKebab();
+  if (deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') deferredInstallPrompt = null;
+    updateInstallMenuItem();
+    return;
+  }
+  if (isIOS()) { showSheet('sheet-ios-install'); return; }
+  toast('Already installed, or your browser doesn\'t support installing');
+});
+updateInstallMenuItem();
 if (isIOS() && !isStandalone() && !localStorage.getItem('cr_ios_install_seen')) {
   setTimeout(() => {
     showSheet('sheet-ios-install');

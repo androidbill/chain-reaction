@@ -296,8 +296,8 @@ function renderLobby() {
     const dot = document.createElement('div');
     dot.className = 'team-dot';
     dot.style.background = TEAM_COLOR[p.team] || '#888';
-    dot.title = 'Tap to change team';
     if (pid === playerId) {
+      dot.title = 'Tap to change team';
       dot.style.cursor = 'pointer';
       dot.addEventListener('click', () => cycleMyTeam(teamCount));
     }

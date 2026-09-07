@@ -1264,7 +1264,9 @@ function renderGame() {
     lastSeenMoveTs = game.lastMove.ts;
     if (!isFirstLoad) {
       const move = game.lastMove;
-      const isSpecial = move.type === 'card' && (isTwoEyedJack(move.code) || isOneEyedJack(move.code));
+      // A completed line is bigger news than which card caused it, so it takes over
+      // the shoutout even on an otherwise-special card rather than showing both.
+      const isSpecial = move.type === 'card' && !move.completedLine && (isTwoEyedJack(move.code) || isOneEyedJack(move.code));
       if (isSpecial) {
         // Called out on its own, ahead of the card actually appearing, since a wild
         // or a removal changes the board in a way that's easy to miss at a glance
@@ -1275,7 +1277,7 @@ function renderGame() {
         showMoveAnnounce(`${move.name} plays ${isTwoEyedJack(move.code) ? 'Wild' : 'Removal'}`, color);
       }
       scheduleMoveEffects(() => {
-        showShoutout(move);
+        if (!isSpecial) showShoutout(move);
         if (move.type === 'card') {
           playMoveSound(move);
           boardView.flashCell(move.targetIndex);
@@ -1753,11 +1755,12 @@ async function attemptTurnTimeout(expectedStartedAtMillis) {
     if (room.paused || room.state !== 'playing') return;
     const game = room.game;
     const order = room.order;
-    const timedOutPlayer = room.players[game.currentPlayerId];
+    const timedOutPid = game.currentPlayerId;
+    const timedOutPlayer = room.players[timedOutPid];
     const turnIndex = nextTurnIndex(game.turnIndex, order.length);
     game.turnIndex = turnIndex;
     game.currentPlayerId = order[turnIndex];
-    game.lastMove = { type: 'timeout', name: timedOutPlayer ? timedOutPlayer.name : 'A player', ts: Date.now() };
+    game.lastMove = { type: 'timeout', playerId: timedOutPid, name: timedOutPlayer ? timedOutPlayer.name : 'A player', ts: Date.now() };
     room.turnStartedAt = localTimestamp();
     applyRoom();
     scheduleBotTurnIfNeeded();
@@ -1774,13 +1777,14 @@ async function attemptTurnTimeout(expectedStartedAtMillis) {
       const startedAt = data.turnStartedAt;
       if (!startedAt || startedAt.toMillis() !== expectedStartedAtMillis) return;
       const order = data.order;
-      const timedOutPlayer = data.players[game.currentPlayerId];
+      const timedOutPid = game.currentPlayerId;
+      const timedOutPlayer = data.players[timedOutPid];
       const turnIndex = nextTurnIndex(game.turnIndex, order.length);
       tx.update(roomRef, {
         'game.turnIndex': turnIndex,
         'game.currentPlayerId': order[turnIndex],
         turnStartedAt: serverTimestamp(),
-        'game.lastMove': { type: 'timeout', name: timedOutPlayer ? timedOutPlayer.name : 'A player', ts: Date.now() },
+        'game.lastMove': { type: 'timeout', playerId: timedOutPid, name: timedOutPlayer ? timedOutPlayer.name : 'A player', ts: Date.now() },
       });
     });
   } catch (e) { /* another client already handled it — fine */ }
@@ -1860,40 +1864,19 @@ function ordinal(n) {
   return n + 'th';
 }
 
+// Every shoutout — a card played, a timeout, a completed line — goes through the
+// same white-pill announcement as a wild/removal call-out (see showMoveAnnounce),
+// so the game only ever has one "announcement" look rather than this plus a
+// separate small dark banner.
 function showShoutout(move) {
-  const cardEl = $('shoutout-card');
-  let duration = 2600;
-  if (move.type === 'timeout') {
-    cardEl.className = 'shoutout-card';
-    cardEl.innerHTML = '<div class="s">&#9203;</div>';
-    $('shoutout-text').textContent = `${move.name}'s time ran out!`;
-  } else if (move.completedLine) {
-    // A completed line is bigger news than the card that caused it, so it
-    // replaces the regular "played a card" shoutout rather than queuing
-    // behind it, and stays up a bit longer.
-    cardEl.className = 'shoutout-card';
-    cardEl.innerHTML = '<div class="s">&#127942;</div>';
-    $('shoutout-text').textContent = `${move.name} completed their ${ordinal(move.completedLine)} line!`;
-    duration = 3400;
-  } else {
-    const rank = cardRank(move.code);
-    const suit = cardSuit(move.code);
-    cardEl.className = 'shoutout-card' + (SUIT_COLOR[suit] === 'red' ? ' red' : '');
-    cardEl.innerHTML = `<div class="r">${rank}</div><div class="s">${SUIT_SYMBOL[suit]}</div>`;
-    const verb = isTwoEyedJack(move.code)
-      ? 'played a WILD card!'
-      : isOneEyedJack(move.code)
-      ? 'removed a chip!'
-      : 'played a card!';
-    $('shoutout-text').textContent = `${move.name} ${verb}`;
-  }
-  const el = $('shoutout');
-  el.hidden = false;
-  el.classList.remove('show');
-  void el.offsetWidth; // restart the transition if one is already showing
-  el.classList.add('show');
-  clearTimeout(showShoutout._t);
-  showShoutout._t = setTimeout(() => { el.classList.remove('show'); }, duration);
+  const mover = room.players[move.playerId];
+  const color = TEAM_COLOR[mover ? mover.team : 0];
+  const text = move.type === 'timeout'
+    ? `${move.name}'s time ran out!`
+    : move.completedLine
+    ? `${move.name} completed their ${ordinal(move.completedLine)} line!`
+    : `${move.name} plays ${cardRank(move.code)}${SUIT_SYMBOL[cardSuit(move.code)]}`;
+  showMoveAnnounce(text, color);
 }
 
 function showTurnAnnounce(text) {

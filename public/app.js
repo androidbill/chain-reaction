@@ -1249,16 +1249,14 @@ function renderGame() {
     turnBanner.innerHTML = `<span class="team-dot" style="background:${TEAM_COLOR[curPlayer.team]}"></span> ${curPlayer.name}'s turn`;
   }
 
-  // A big, unmissable "it's X's turn" announcement for everyone at the table,
-  // whenever the active player actually changes (not on every render, and not on
-  // the first load of a game already in progress).
-  if (curPlayer && curPid !== lastAnnouncedPid) {
-    const isFirstLoad = lastAnnouncedPid === undefined;
-    lastAnnouncedPid = curPid;
-    if (!isFirstLoad && !room.paused) {
-      showTurnAnnounce(isMyTurn() ? 'Your turn!' : `${curPlayer.name}'s turn!`);
-    }
-  }
+  // How long the current move's own card-fly animation will still be running for —
+  // computed below before the turn announcement, so a turn change landing on the
+  // very same move (the usual case: one move both finishes a card AND hands the
+  // turn to the next player) can hold off showing its "X's turn!" pill until the
+  // card animation is actually done, instead of popping up behind it (z-index
+  // aside, showing both large centered overlays on top of each other at once never
+  // reads as one wanting the other to move out of the way).
+  let cardFlyStillRunningMs = 0;
 
   if (game.lastMove && game.lastMove.ts !== lastSeenMoveTs) {
     const isFirstLoad = lastSeenMoveTs === undefined;
@@ -1268,6 +1266,7 @@ function renderGame() {
       // A completed line is bigger news than which card caused it, so it takes over
       // the shoutout even on an otherwise-special card rather than showing both.
       const isSpecial = move.type === 'card' && !move.completedLine && (isTwoEyedJack(move.code) || isOneEyedJack(move.code));
+      const preAnnounceMs = isSpecial ? MOVE_ANNOUNCE_MS : 0;
       if (isSpecial) {
         // Called out on its own, ahead of the card actually appearing, since a wild
         // or a removal changes the board in a way that's easy to miss at a glance
@@ -1284,7 +1283,21 @@ function renderGame() {
           boardView.flashCell(move.targetIndex);
           showCardFly(move);
         }
-      }, isSpecial ? 1000 : 0);
+      }, preAnnounceMs);
+      if (move.type === 'card') cardFlyStillRunningMs = preAnnounceMs + CARD_FLY_TOTAL_MS;
+    }
+  }
+
+  // A big, unmissable "it's X's turn" announcement for everyone at the table,
+  // whenever the active player actually changes (not on every render, and not on
+  // the first load of a game already in progress).
+  if (curPlayer && curPid !== lastAnnouncedPid) {
+    const isFirstLoad = lastAnnouncedPid === undefined;
+    lastAnnouncedPid = curPid;
+    if (!isFirstLoad && !room.paused) {
+      const text = isMyTurn() ? 'Your turn!' : `${curPlayer.name}'s turn!`;
+      clearTimeout(showTurnAnnounce._delayT);
+      showTurnAnnounce._delayT = setTimeout(() => showTurnAnnounce(text), cardFlyStillRunningMs);
     }
   }
 
@@ -1898,6 +1911,7 @@ function showTurnAnnounce(text) {
 // mover's own team color instead of the fixed dark gray. A separate element/timer
 // from #turn-announce (rather than reusing it) so a wild/removal call-out and a
 // turn change landing close together don't cut each other's timer short.
+const MOVE_ANNOUNCE_MS = 1000;
 function showMoveAnnounce(text, color) {
   const el = $('move-announce');
   el.innerHTML = `<div class="turn-announce-text" style="color:${color}">${text}</div>`;
@@ -1909,7 +1923,7 @@ function showMoveAnnounce(text, color) {
   showMoveAnnounce._t = setTimeout(() => {
     el.classList.remove('show');
     setTimeout(() => { el.hidden = true; }, 250);
-  }, 1000);
+  }, MOVE_ANNOUNCE_MS);
 }
 
 // A wild/removal play holds its showMoveAnnounce() pill on screen for 1s before the
@@ -1924,6 +1938,13 @@ function scheduleMoveEffects(fn, delayMs) {
   if (delayMs > 0) moveEffectsTimeoutId = setTimeout(fn, delayMs);
   else fn();
 }
+
+// Named so the "how long is this animation still going to run for" calc up in
+// renderGame (see cardFlyStillRunningMs) can't silently drift out of sync with the
+// actual setTimeout values below.
+const CARD_FLY_HOLD_MS = 1500; // ~0.5s spinning to a stop, then held still and readable
+const CARD_FLY_LANDING_MS = 620; // spin back down, shrink, and move to the landed cell
+const CARD_FLY_TOTAL_MS = CARD_FLY_HOLD_MS + CARD_FLY_LANDING_MS;
 
 // A played card appears large in the middle of the board, then flies down and
 // shrinks onto the exact cell it landed on — computed from the board's own current
@@ -1985,8 +2006,8 @@ function showCardFly(move) {
     showCardFly._t2 = setTimeout(() => {
       el.hidden = true;
       el.classList.remove('show', 'landing');
-    }, 620);
-  }, 1500); // ~0.5s spinning to a stop, then held still and readable for 1s before spinning back down
+    }, CARD_FLY_LANDING_MS);
+  }, CARD_FLY_HOLD_MS);
 }
 
 function formatDuration(ms) {

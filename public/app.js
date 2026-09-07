@@ -1046,6 +1046,13 @@ function renderHand() {
     for (const el of scroller.children) {
       el.style.width = width + 'px';
       el.style.height = Math.round(width / CARD_ASPECT) + 'px';
+      // Rank/suit font sizes are driven off the card's actual on-screen width
+      // (not the CSS clamp()'s vw guess) so the doubled-size digits/symbols
+      // always stay inside the card instead of spilling into neighboring cards.
+      const r = el.querySelector('.r');
+      const s = el.querySelector('.s');
+      if (r) r.style.fontSize = Math.round(width * 0.62) + 'px';
+      if (s) s.style.fontSize = Math.round(width * 0.7) + 'px';
     }
   }
 

@@ -149,7 +149,17 @@ const CORE_FILES = [
   'sounds/turn-sound.mp3', 'sounds/card-lay-sound.mp3', 'sounds/wild-card-sound.mp3',
   'sounds/remove-card-sound.mp3', 'sounds/sequence-sound.mp3', 'sounds/win-sound.mp3',
 ];
+let refreshing = false;
 async function fullRefresh() {
+  // A slow tap-happy user (or the kebab item and the banner both being tappable)
+  // could otherwise fire this twice concurrently — two overlapping cache-clears and
+  // navigation attempts racing each other was a plausible way for a refresh to land
+  // somewhere odd instead of the plain fresh reload it's supposed to be.
+  if (refreshing) return;
+  refreshing = true;
+  const banner = $('update-banner');
+  if (banner && !banner.hidden) banner.querySelector('span').textContent = 'Updating…';
+  toast('Updating…');
   try {
     if (window.caches) {
       const keys = await caches.keys();
@@ -165,10 +175,17 @@ async function fullRefresh() {
     // server has newer ones, leaving the update banner stuck forever.
     await Promise.all(CORE_FILES.map((f) => fetch(f, { cache: 'reload' }).catch(() => {})));
   } catch (e) { /* ignore */ }
-  const url = location.origin + location.pathname + '?fresh=' + Date.now();
-  location.replace(url);
-  setTimeout(() => { location.href = url; }, 400);
-  setTimeout(() => { location.reload(); }, 900);
+  const url = new URL(location.href);
+  url.searchParams.set('fresh', Date.now().toString(36));
+  location.replace(url.toString());
+  // An installed PWA can ignore replace() in some states, and a cold reload with
+  // every cache just wiped can legitimately take a couple of seconds (re-fetching
+  // the Firebase SDK from its CDN with nothing cached) — these fallbacks need to be
+  // slow enough not to fire while that first navigation is still honestly in
+  // progress, or a second, redundant reload can cut it off mid-load right as it was
+  // about to succeed.
+  setTimeout(() => { location.href = url.toString(); }, 1200);
+  setTimeout(() => { location.reload(); }, 2600);
 }
 let lastVisCheck = 0;
 document.addEventListener('visibilitychange', () => {
@@ -519,9 +536,21 @@ function enterRoom(code) {
   // The listener above can still be the one that stalls on a cold iOS connection. A direct
   // server read runs over a fresh request rather than the long-lived stream, so it lands
   // even while that stream is still negotiating — the first paint stops depending on it.
-  getDocFromServer(roomRef).then((snap) => {
-    if (snap.exists()) { room = snap.data(); noteFreshRoom(room, true); applyRoom(); }
-  }).catch(() => {});
+  // Right after a forced refresh (every cache wiped, service worker just re-registering)
+  // is exactly when a single attempt is least likely to land — retried a few times with
+  // backoff instead of silently giving up and leaving the player stuck on the home
+  // screen with no error and no obvious way back in besides restarting the app.
+  fetchRoomWithRetry(roomRef, 4);
+}
+
+async function fetchRoomWithRetry(ref, attemptsLeft, delayMs = 600) {
+  try {
+    const snap = await getDocFromServer(ref);
+    if (snap.exists()) { room = snap.data(); noteFreshRoom(room, true); applyRoom(); return; }
+  } catch (e) { /* retry below */ }
+  if (attemptsLeft > 1 && ref === roomRef) {
+    setTimeout(() => fetchRoomWithRetry(ref, attemptsLeft - 1, delayMs * 1.5), delayMs);
+  }
 }
 
 function subscribeRoom() {
@@ -535,7 +564,12 @@ function subscribeRoom() {
     room = snap.data();
     noteFreshRoom(room, !snap.metadata.fromCache);
     applyRoom();
-  }, () => {});
+  }, () => {
+    // The stream itself failed outright (not just slow) — re-subscribing is what
+    // recovers from that rather than leaving the player on a dead listener with no
+    // visible sign anything is wrong.
+    if (roomRef) setTimeout(() => { if (roomRef) subscribeRoom(); }, 1500);
+  });
 }
 
 // Nothing in this app ever deletes a room document — there's no host-kick, no expiry

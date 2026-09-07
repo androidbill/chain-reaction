@@ -1283,7 +1283,7 @@ function renderGame() {
           boardView.flashCell(move.targetIndex);
           showCardFly(move);
         }
-      }, isSpecial ? 2000 : 0);
+      }, isSpecial ? 1000 : 0);
     }
   }
 
@@ -1908,10 +1908,10 @@ function showMoveAnnounce(text, color) {
   showMoveAnnounce._t = setTimeout(() => {
     el.classList.remove('show');
     setTimeout(() => { el.hidden = true; }, 250);
-  }, 2000);
+  }, 1000);
 }
 
-// A wild/removal play holds its showMoveAnnounce() pill on screen for 2s before the
+// A wild/removal play holds its showMoveAnnounce() pill on screen for 1s before the
 // usual sound/flash/card-fly/shoutout sequence runs, so the call-out is actually
 // read before the board changes; an ordinary card play runs that sequence
 // immediately (delayMs 0). Tracked so a second move arriving while an earlier one's

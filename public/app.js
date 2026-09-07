@@ -16,6 +16,7 @@ import {
 } from './rules.js';
 import { BoardView, TEAM_COLOR } from './render.js';
 import { sfx } from './audio.js';
+import { chooseBotMove, makeBotName } from './bot.js';
 
 const fbApp = initializeApp(firebaseConfig);
 // iOS Safari (including installed PWAs) frequently stalls the SDK's default WebChannel
@@ -63,6 +64,20 @@ let celebrating = false;
 let timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
 let timerIntervalId = null;
 let deferredInstallPrompt = null;
+
+// ---------------- Solo (bots) ----------------
+// Solo runs entirely on-device — no Firestore at all, room is a plain local object,
+// and roomRef stays null throughout. computeMoveResult()/computeSwapResult() below
+// are the same pure functions the online path uses; solo just applies their result
+// directly instead of sending it through a transaction.
+let solo = false;
+let soloDifficulty = 'medium';
+let botTimeoutId = null;
+/** Stands in for a Firestore Timestamp so the online timer code (which calls
+ * .toMillis() on turnStartedAt/startedAt/finishedAt) works unchanged in solo. */
+function localTimestamp(ms = Date.now()) {
+  return { toMillis: () => ms };
+}
 
 // ---------------- Small helpers ----------------
 function toast(msg, ms = 2200) {
@@ -136,7 +151,7 @@ async function checkForUpdate() {
 }
 function announceUpdate() { $('update-banner').hidden = false; }
 const CORE_FILES = [
-  'index.html', 'app.js', 'board.js', 'render.js', 'cards.js', 'rules.js', 'audio.js',
+  'index.html', 'app.js', 'board.js', 'render.js', 'cards.js', 'rules.js', 'audio.js', 'bot.js',
   'firebase-config.js', 'version.js', 'styles.css', 'manifest.webmanifest',
 ];
 async function fullRefresh() {
@@ -241,8 +256,9 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeKebab
 $('kebab-refresh').addEventListener('click', () => { closeKebab(); fullRefresh(); });
 $('kebab-share').addEventListener('click', async () => {
   closeKebab();
+  if (solo || !roomCode) return; // no code to share, and the item is hidden anyway
   const url = location.origin + location.pathname;
-  const text = roomCode ? `Join my Chain Reaction game — room code ${roomCode}` : 'Play Chain Reaction with me!';
+  const text = `Join my Chain Reaction game — room code ${roomCode}`;
   if (navigator.share) {
     try { await navigator.share({ title: 'Chain Reaction', text, url }); } catch (e) {}
     return;
@@ -257,24 +273,51 @@ $('kebab-about').addEventListener('click', () => {
 });
 $('kebab-pause').addEventListener('click', async () => {
   closeKebab();
-  if (!room || !roomRef) return;
+  if (!room) return;
   const next = !room.paused;
+  if (solo) {
+    room.paused = next;
+    room.pausedBy = next ? playerId : null;
+    // Resuming gives the current player a fresh 30s rather than trying to account
+    // for time spent paused — simpler and matches the online behaviour.
+    if (!next) { room.turnStartedAt = localTimestamp(); scheduleBotTurnIfNeeded(); }
+    applyRoom();
+    return;
+  }
+  if (!roomRef) return;
   const patch = { paused: next, pausedBy: next ? playerId : null };
-  // Resuming gives the current player a fresh 30s rather than trying to
-  // account for time spent paused — simpler and avoids clock-skew math.
   if (!next) patch.turnStartedAt = serverTimestamp();
   await updateDoc(roomRef, patch).catch(() => toast('Could not update pause state'));
 });
 $('btn-resume-game').addEventListener('click', async () => {
-  if (!room || !roomRef) return;
+  if (!room) return;
+  if (solo) {
+    room.paused = false;
+    room.pausedBy = null;
+    room.turnStartedAt = localTimestamp();
+    applyRoom();
+    scheduleBotTurnIfNeeded();
+    return;
+  }
+  if (!roomRef) return;
   await updateDoc(roomRef, { paused: false, pausedBy: null, turnStartedAt: serverTimestamp() }).catch(() => toast('Could not resume'));
 });
 $('kebab-restart').addEventListener('click', async () => {
   closeKebab();
-  if (!room || !roomRef || room.hostId !== playerId) return;
+  if (!room || room.hostId !== playerId) return;
   if (!confirm('Restart the game? Everyone gets a fresh deal.')) return;
   const teamCount = room.settings.teamCount;
   const order = room.order && room.order.length ? room.order : Object.keys(room.players);
+  if (solo) {
+    room.state = 'playing';
+    room.paused = false;
+    room.pausedBy = null;
+    dealNewGameLocally(order, teamCount);
+    applyRoom();
+    scheduleBotTurnIfNeeded();
+    return;
+  }
+  if (!roomRef) return;
   const patch = dealNewGamePatch(order, teamCount);
   await updateDoc(roomRef, { state: 'playing', paused: false, pausedBy: null, ...patch }).catch(() => toast('Could not restart game'));
 });
@@ -310,6 +353,26 @@ $('btn-join').addEventListener('click', () => {
   const code = $('input-code').value.trim().toUpperCase();
   if (code.length < 4) { toast('Enter a room code'); return; }
   joinRoom(code);
+});
+
+let soloTeamCount = 2;
+for (const btn of document.querySelectorAll('#solo-team-count-seg button')) {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#solo-team-count-seg button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    soloTeamCount = Number(btn.dataset.teams);
+  });
+}
+for (const btn of document.querySelectorAll('#solo-difficulty-seg button')) {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#solo-difficulty-seg button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    soloDifficulty = btn.dataset.diff;
+  });
+}
+$('btn-play-solo').addEventListener('click', () => {
+  if (!requireName()) return;
+  startSolo(soloTeamCount, soloDifficulty);
 });
 
 function requireName() {
@@ -433,6 +496,13 @@ function stopClockPing() {
 }
 
 function enterRoom(code) {
+  solo = false;
+  clearTimeout(botTimeoutId);
+  // A previous solo session trusts clockOffset=0 outright (nothing but this device
+  // was ever involved); an online room needs to measure its own real offset from
+  // scratch rather than carry that borrowed trust over.
+  clockOffset = null;
+  clockSamples = [];
   roomCode = code;
   $('game-room-code').textContent = code;
   roomRef = doc(db, 'rooms', code);
@@ -516,6 +586,8 @@ function leaveRoom() {
   if (unsubRoom) unsubRoom();
   unsubRoom = null;
   stopClockPing();
+  clearTimeout(botTimeoutId);
+  solo = false;
   roomRef = null;
   roomCode = null;
   room = null;
@@ -546,7 +618,7 @@ function applyRoom() {
       console.error(e);
       toast('Render error: ' + (e && e.message ? e.message : e));
     }
-    if (room.state === 'finished' && room.game && room.game.winnerTeam != null) {
+    if (room.state === 'finished' && room.game && (room.game.winnerTeam != null || room.game.draw)) {
       // Keyed on room.finishedAt so this fires exactly once per finish (not once per
       // render — every snapshot delivery while finished, e.g. a clock ping, would
       // otherwise retrigger it) and so a second win later in the same room session
@@ -556,13 +628,18 @@ function applyRoom() {
       const finishKey = room.finishedAt && room.finishedAt.toMillis ? room.finishedAt.toMillis() : null;
       if (finishKey != null && finishKey !== celebratedFinishKey && !celebrating) {
         celebratedFinishKey = finishKey;
-        celebrating = true;
-        runWinCelebration(room.game, room.game.winnerTeam, () => {
-          celebrating = false;
-          showWinOverlay(room.game.winnerTeam);
-        });
+        if (room.game.draw) {
+          // Nothing to highlight or celebrate — straight to the stats screen.
+          showWinOverlay(null);
+        } else {
+          celebrating = true;
+          runWinCelebration(room.game, room.game.winnerTeam, () => {
+            celebrating = false;
+            showWinOverlay(room.game.winnerTeam);
+          });
+        }
       } else if (!celebrating && finishKey === celebratedFinishKey) {
-        showWinOverlay(room.game.winnerTeam);
+        showWinOverlay(room.game.draw ? null : room.game.winnerTeam);
       }
       // else: celebration already in flight — the stats screen waits for it.
     }
@@ -571,6 +648,7 @@ function applyRoom() {
 
 function updateGameKebabVisibility() {
   const inGame = room && (room.state === 'playing' || room.state === 'finished');
+  $('kebab-share').hidden = solo; // solo has no room code to invite anyone to
   $('kebab-leave-game').hidden = !inGame;
   $('kebab-restart').hidden = !inGame || room.hostId !== playerId;
   $('kebab-pause').hidden = !inGame || room.state === 'finished';
@@ -687,6 +765,96 @@ function dealNewGamePatch(order, teamCount) {
     finishedAt: null,
     game: dealNewGame(order, teamCount),
   };
+}
+
+// A local counterpart to dealNewGamePatch(), applied straight to the local room
+// object instead of returned as a Firestore patch — solo has no serverTimestamp().
+function dealNewGameLocally(order, teamCount) {
+  room.turnStartedAt = localTimestamp();
+  room.startedAt = localTimestamp();
+  room.finishedAt = null;
+  room.game = dealNewGame(order, teamCount);
+}
+
+function startSolo(teamCount, difficulty) {
+  solo = true;
+  soloDifficulty = difficulty;
+  roomCode = null;
+  roomRef = null;
+  if (unsubRoom) { unsubRoom(); unsubRoom = null; }
+  stopClockPing();
+  lastSeenMoveTs = undefined;
+  wasMyTurn = undefined;
+  lastAnnouncedPid = undefined;
+  celebratedFinishKey = null;
+  celebrating = false;
+  clockOffset = 0; // nothing but this device involved — no clock skew to correct for
+  localStorage.removeItem('cr_room'); // solo has no code to resume by
+
+  const usedNames = [playerName];
+  const players = { [playerId]: { name: playerName, team: 0, joinedAt: 0 } };
+  const order = [playerId];
+  for (let t = 1; t < teamCount; t++) {
+    const botId = `bot-${t}`;
+    const name = makeBotName(usedNames);
+    usedNames.push(name);
+    players[botId] = { name, team: t, joinedAt: t, isBot: true };
+    order.push(botId);
+  }
+
+  room = {
+    hostId: playerId,
+    state: 'playing',
+    paused: false,
+    pausedBy: null,
+    settings: { teamCount },
+    players,
+    order,
+    game: null,
+  };
+  dealNewGameLocally(order, teamCount);
+  applyRoom();
+  scheduleBotTurnIfNeeded();
+}
+
+// If it's now a bot's turn, has it "think" for a beat and then play — the delay is
+// purely cosmetic (an instant bot move reads as broken, not fast), never affects what
+// it plays. Re-derives the current player fresh each call rather than trusting a
+// closed-over id, since a human move, a timeout, or another bot's move can all change
+// whose turn it is before this timer fires.
+function scheduleBotTurnIfNeeded() {
+  clearTimeout(botTimeoutId);
+  if (!solo || !room || room.state !== 'playing' || room.paused) return;
+  const curPlayer = room.players[room.game.currentPlayerId];
+  if (!curPlayer || !curPlayer.isBot) return;
+  botTimeoutId = setTimeout(runBotTurn, 700 + Math.random() * 900);
+}
+
+function runBotTurn() {
+  if (!solo || !room || room.state !== 'playing' || room.paused) return;
+  const botPid = room.game.currentPlayerId;
+  const botPlayer = room.players[botPid];
+  if (!botPlayer || !botPlayer.isBot) return;
+
+  const game = room.game;
+  const teamCount = room.settings.teamCount;
+  const hand = game.hands[botPid] || [];
+  const sequences = computeSequences(game.board, teamCount);
+  const locked = lockedIndicesFrom(sequences);
+  const move = chooseBotMove(game.board, hand, teamCount, botPlayer.team, locked, soloDifficulty);
+  if (!move) return; // shouldn't happen — a full board with cards left in hand
+  if (move.pass) {
+    const result = computePassResult(room, botPid);
+    if (result.ok) applyPassResultLocally(result);
+    return;
+  }
+  if (move.swap) {
+    const result = computeSwapResult(room, botPid, move.swap);
+    if (result.ok) applySwapResultLocally(result);
+    return;
+  }
+  const result = computeMoveResult(room, botPid, move.instanceId, move.targetIndex);
+  if (result.ok) applyMoveResultLocally(result);
 }
 
 // ---------------- Game screen ----------------
@@ -883,17 +1051,28 @@ function renderHand() {
 
   const hint = $('hand-hint');
   const deadBtn = $('btn-dead-card');
+  const passBtn = $('btn-pass-turn');
   $('hand-footer').hidden = !!pendingMove;
   $('undo-bar').hidden = !pendingMove;
   if (isMyTurn()) {
-    const map = autoResolveTargets(game.board, fullHand, locked);
-    hint.textContent = map.size > 0
-      ? 'Tap a highlighted space to play a card'
-      : 'No plays available — swap a dead card';
-    deadBtn.hidden = map.size > 0;
+    if (fullHand.length === 0) {
+      // The deck ran completely dry and this hand was never topped back up — nothing
+      // to play, nothing to swap. See computePassResult()/passTurn().
+      hint.textContent = 'No cards left — pass your turn';
+      deadBtn.hidden = true;
+      passBtn.hidden = false;
+    } else {
+      const map = autoResolveTargets(game.board, fullHand, locked);
+      hint.textContent = map.size > 0
+        ? 'Tap a highlighted space to play a card'
+        : 'No plays available — swap a dead card';
+      deadBtn.hidden = map.size > 0;
+      passBtn.hidden = true;
+    }
   } else {
     hint.textContent = 'Waiting for your turn…';
     deadBtn.hidden = true;
+    passBtn.hidden = true;
   }
 }
 
@@ -977,86 +1156,104 @@ function cancelPendingMove() {
 }
 $('btn-undo-move').addEventListener('click', cancelPendingMove);
 
+// Pure: works out what playing instanceId at targetIndex means for the current
+// state, for whichever player is named — used identically by the online transaction
+// and the solo local path below, so the actual rules only live in one place. `data`
+// is anything shaped like a room ({ game, settings, players, order, paused, state });
+// online passes the transaction's fresh read, solo passes the local room object
+// directly. Returns { ok:false, reason } or { ok:true, ...everything that changed }.
+function computeMoveResult(data, myPid, instanceId, targetIndex) {
+  const game = data.game;
+  const teamCount = data.settings.teamCount;
+  if (!game || data.paused || game.currentPlayerId !== myPid || data.state !== 'playing') return { ok: false, reason: 'not-your-turn' };
+  const hand = game.hands[myPid] || [];
+  if (!hand.includes(instanceId)) return { ok: false, reason: 'card-not-in-hand' };
+  const sequencesBefore = findSequences(game.board, teamCount);
+  const locked = lockedIndicesFrom(sequencesBefore);
+  const check = validateMove(game.board, instanceId, targetIndex, locked);
+  if (!check.ok) return { ok: false, reason: check.reason };
+
+  const board = game.board.slice();
+  const team = data.players[myPid].team;
+  if (check.action === 'place') board[targetIndex] = team;
+  else board[targetIndex] = null;
+
+  const newHand = hand.filter((c) => c !== instanceId);
+  const deck = game.deck.slice();
+  if (deck.length > 0) newHand.push(deck.shift());
+  const hands = { ...game.hands, [myPid]: newHand };
+
+  const sequences = findSequences(board, teamCount);
+  const winnerTeam = checkWinner(sequences, teamCount);
+  const order = data.order;
+  const turnIndex = nextTurnIndex(game.turnIndex, order.length);
+  const currentPlayerId = winnerTeam == null ? order[turnIndex] : game.currentPlayerId;
+  const code = instanceCode(instanceId);
+
+  // Track per-player stats (wilds/removals/cards played) for the
+  // end-of-game summary.
+  const prevStats = (game.stats && game.stats[myPid]) || { wildsPlayed: 0, removalsPlayed: 0, cardsPlayed: 0 };
+  const stats = {
+    ...game.stats,
+    [myPid]: {
+      wildsPlayed: prevStats.wildsPlayed + (isTwoEyedJack(code) ? 1 : 0),
+      removalsPlayed: prevStats.removalsPlayed + (isOneEyedJack(code) ? 1 : 0),
+      cardsPlayed: prevStats.cardsPlayed + 1,
+    },
+  };
+
+  // Did this move complete one or more new sequences for the mover's
+  // team? findSequences already resolves overlap so this reflects
+  // legitimately distinct lines, not just any run of 5.
+  const countBefore = countSequencesByTeam(sequencesBefore, teamCount)[team];
+  const countAfter = countSequencesByTeam(sequences, teamCount)[team];
+  const completedLines = (game.completedLines || []).slice();
+  let completedLine = null;
+  for (let ord = countBefore + 1; ord <= countAfter; ord++) {
+    completedLines.push({ team, playerId: myPid, playerName: data.players[myPid].name, ordinal: ord, ts: Date.now() });
+    completedLine = ord;
+  }
+
+  const lastMove = {
+    type: 'card',
+    playerId: myPid,
+    name: data.players[myPid].name,
+    code,
+    action: check.action,
+    targetIndex,
+    completedLine,
+    ts: Date.now(),
+  };
+
+  return { ok: true, board, hands, deck, turnIndex, currentPlayerId, winnerTeam, stats, completedLines, lastMove };
+}
+
 async function applyMove(instanceId, targetIndex, action) {
   const myPid = playerId;
+  if (solo) {
+    const result = computeMoveResult(room, myPid, instanceId, targetIndex);
+    if (!result.ok) { toast('Move rejected'); return; }
+    applyMoveResultLocally(result);
+    return;
+  }
   try {
     await runTransaction(db, async (tx) => {
       const snap = await tx.get(roomRef);
       if (!snap.exists()) throw new Error('room-gone');
       const data = snap.data();
-      const game = data.game;
-      const teamCount = data.settings.teamCount;
-      if (!game || data.paused || game.currentPlayerId !== myPid || data.state !== 'playing') throw new Error('not-your-turn');
-      const hand = game.hands[myPid] || [];
-      if (!hand.includes(instanceId)) throw new Error('card-not-in-hand');
-      const sequencesBefore = findSequences(game.board, teamCount);
-      const locked = lockedIndicesFrom(sequencesBefore);
-      const check = validateMove(game.board, instanceId, targetIndex, locked);
-      if (!check.ok) throw new Error(check.reason);
-
-      const board = game.board.slice();
-      const team = data.players[myPid].team;
-      if (check.action === 'place') board[targetIndex] = team;
-      else board[targetIndex] = null;
-
-      const newHand = hand.filter((c) => c !== instanceId);
-      const deck = game.deck.slice();
-      if (deck.length > 0) newHand.push(deck.shift());
-      const hands = { ...game.hands, [myPid]: newHand };
-
-      const sequences = findSequences(board, teamCount);
-      const winnerTeam = checkWinner(sequences, teamCount);
-      const order = data.order;
-      const turnIndex = nextTurnIndex(game.turnIndex, order.length);
-      const currentPlayerId = winnerTeam == null ? order[turnIndex] : game.currentPlayerId;
-      const code = instanceCode(instanceId);
-
-      // Track per-player stats (wilds/removals/cards played) for the
-      // end-of-game summary.
-      const prevStats = (game.stats && game.stats[myPid]) || { wildsPlayed: 0, removalsPlayed: 0, cardsPlayed: 0 };
-      const stats = {
-        ...game.stats,
-        [myPid]: {
-          wildsPlayed: prevStats.wildsPlayed + (isTwoEyedJack(code) ? 1 : 0),
-          removalsPlayed: prevStats.removalsPlayed + (isOneEyedJack(code) ? 1 : 0),
-          cardsPlayed: prevStats.cardsPlayed + 1,
-        },
-      };
-
-      // Did this move complete one or more new sequences for the mover's
-      // team? findSequences already resolves overlap so this reflects
-      // legitimately distinct lines, not just any run of 5.
-      const countBefore = countSequencesByTeam(sequencesBefore, teamCount)[team];
-      const countAfter = countSequencesByTeam(sequences, teamCount)[team];
-      const completedLines = (game.completedLines || []).slice();
-      let completedLine = null;
-      for (let ord = countBefore + 1; ord <= countAfter; ord++) {
-        completedLines.push({ team, playerId: myPid, playerName: data.players[myPid].name, ordinal: ord, ts: Date.now() });
-        completedLine = ord;
-      }
-
-      const lastMove = {
-        type: 'card',
-        playerId: myPid,
-        name: data.players[myPid].name,
-        code,
-        action: check.action,
-        targetIndex,
-        completedLine,
-        ts: Date.now(),
-      };
-
+      const result = computeMoveResult(data, myPid, instanceId, targetIndex);
+      if (!result.ok) throw new Error(result.reason);
       tx.update(roomRef, {
-        'game.board': board,
-        'game.hands': hands,
-        'game.deck': deck,
-        'game.turnIndex': winnerTeam == null ? turnIndex : game.turnIndex,
-        'game.currentPlayerId': currentPlayerId,
-        'game.winnerTeam': winnerTeam,
-        'game.lastMove': lastMove,
-        'game.stats': stats,
-        'game.completedLines': completedLines,
-        ...(winnerTeam == null ? { turnStartedAt: serverTimestamp() } : { state: 'finished', finishedAt: serverTimestamp() }),
+        'game.board': result.board,
+        'game.hands': result.hands,
+        'game.deck': result.deck,
+        'game.turnIndex': result.winnerTeam == null ? result.turnIndex : data.game.turnIndex,
+        'game.currentPlayerId': result.currentPlayerId,
+        'game.winnerTeam': result.winnerTeam,
+        'game.lastMove': result.lastMove,
+        'game.stats': result.stats,
+        'game.completedLines': result.completedLines,
+        ...(result.winnerTeam == null ? { turnStartedAt: serverTimestamp() } : { state: 'finished', finishedAt: serverTimestamp() }),
       });
     });
   } catch (e) {
@@ -1064,34 +1261,71 @@ async function applyMove(instanceId, targetIndex, action) {
   }
 }
 
+// Solo's counterpart to the tx.update() calls above — same fields, applied directly
+// to the local room object instead of sent to Firestore. Always re-renders and then
+// checks whether the turn just landed on a bot, so bot-to-bot chains (3-team solo:
+// you -> bot -> bot -> you) keep themselves going without any further prompting.
+function applyMoveResultLocally(result) {
+  const game = room.game;
+  game.board = result.board;
+  game.hands = result.hands;
+  game.deck = result.deck;
+  if (result.winnerTeam == null) game.turnIndex = result.turnIndex;
+  game.currentPlayerId = result.currentPlayerId;
+  game.winnerTeam = result.winnerTeam;
+  game.lastMove = result.lastMove;
+  game.stats = result.stats;
+  game.completedLines = result.completedLines;
+  if (result.winnerTeam == null) {
+    room.turnStartedAt = localTimestamp();
+  } else {
+    room.state = 'finished';
+    room.finishedAt = localTimestamp();
+  }
+  applyRoom();
+  scheduleBotTurnIfNeeded();
+}
+
+// Pure counterpart to computeMoveResult for the "no plays — swap a dead card" path.
+function computeSwapResult(data, myPid, instanceId) {
+  const game = data.game;
+  const teamCount = data.settings.teamCount;
+  if (!game || data.paused || game.currentPlayerId !== myPid || data.state !== 'playing') return { ok: false };
+  const hand = game.hands[myPid] || [];
+  if (!hand.includes(instanceId)) return { ok: false };
+  const sequences = findSequences(game.board, teamCount);
+  const locked = lockedIndicesFrom(sequences);
+  if (!isDeadCard(game.board, instanceId, locked)) return { ok: false };
+
+  const newHand = hand.filter((c) => c !== instanceId);
+  const deck = game.deck.slice();
+  if (deck.length > 0) newHand.push(deck.shift());
+  const hands = { ...game.hands, [myPid]: newHand };
+  const order = data.order;
+  const turnIndex = nextTurnIndex(game.turnIndex, order.length);
+  return { ok: true, hands, deck, turnIndex, currentPlayerId: order[turnIndex] };
+}
+
 async function applyDeadCardSwap(instanceId) {
   const myPid = playerId;
+  if (solo) {
+    const result = computeSwapResult(room, myPid, instanceId);
+    if (!result.ok) { toast('Could not swap card'); return; }
+    applySwapResultLocally(result);
+    return;
+  }
   try {
     await runTransaction(db, async (tx) => {
       const snap = await tx.get(roomRef);
       if (!snap.exists()) throw new Error('room-gone');
       const data = snap.data();
-      const game = data.game;
-      const teamCount = data.settings.teamCount;
-      if (!game || data.paused || game.currentPlayerId !== myPid || data.state !== 'playing') throw new Error('not-your-turn');
-      const hand = game.hands[myPid] || [];
-      if (!hand.includes(instanceId)) throw new Error('card-not-in-hand');
-      const sequences = findSequences(game.board, teamCount);
-      const locked = lockedIndicesFrom(sequences);
-      if (!isDeadCard(game.board, instanceId, locked)) throw new Error('card-not-dead');
-
-      const newHand = hand.filter((c) => c !== instanceId);
-      const deck = game.deck.slice();
-      if (deck.length > 0) newHand.push(deck.shift());
-      const hands = { ...game.hands, [myPid]: newHand };
-      const order = data.order;
-      const turnIndex = nextTurnIndex(game.turnIndex, order.length);
-
+      const result = computeSwapResult(data, myPid, instanceId);
+      if (!result.ok) throw new Error('cannot-swap');
       tx.update(roomRef, {
-        'game.hands': hands,
-        'game.deck': deck,
-        'game.turnIndex': turnIndex,
-        'game.currentPlayerId': order[turnIndex],
+        'game.hands': result.hands,
+        'game.deck': result.deck,
+        'game.turnIndex': result.turnIndex,
+        'game.currentPlayerId': result.currentPlayerId,
         turnStartedAt: serverTimestamp(),
       });
     });
@@ -1100,6 +1334,91 @@ async function applyDeadCardSwap(instanceId) {
   }
 }
 
+function applySwapResultLocally(result) {
+  const game = room.game;
+  game.hands = result.hands;
+  game.deck = result.deck;
+  game.turnIndex = result.turnIndex;
+  game.currentPlayerId = result.currentPlayerId;
+  room.turnStartedAt = localTimestamp();
+  applyRoom();
+  scheduleBotTurnIfNeeded();
+}
+
+// Passing is only legal with a genuinely empty hand — the deck ran out and this
+// player was never topped back up. Found via bot-vs-bot simulation, not a
+// hypothetical: without this, whoever's hand runs out first has no swap target
+// (isDeadCard has nothing to check) and no legal move either, so the turn — and the
+// whole game, since nothing else advances it — was stuck for good. Same soft-lock
+// existed for a human in the online game; this closes it for both.
+//
+// The simulation also turned up the case one level worse: the deck can run out with
+// EVERY hand empty and no one holding a winning line — at that point nothing can ever
+// happen again, and without the draw check below the game would cycle passes forever.
+// For a table of humans that reads as "everyone gave up"; for a table of bots it's a
+// genuine infinite loop, since nothing paces them the way a person deciding to quit
+// would. Declared the instant it's true rather than waiting to see it repeat.
+function computePassResult(data, myPid) {
+  const game = data.game;
+  if (!game || data.paused || game.currentPlayerId !== myPid || data.state !== 'playing') return { ok: false };
+  const hand = game.hands[myPid] || [];
+  if (hand.length > 0) return { ok: false };
+  const order = data.order;
+  const stalemate = game.deck.length === 0 && order.every((pid) => (game.hands[pid] || []).length === 0);
+  if (stalemate) return { ok: true, draw: true };
+  const turnIndex = nextTurnIndex(game.turnIndex, order.length);
+  return { ok: true, turnIndex, currentPlayerId: order[turnIndex] };
+}
+
+async function passTurn() {
+  const myPid = playerId;
+  if (solo) {
+    const result = computePassResult(room, myPid);
+    if (!result.ok) return;
+    applyPassResultLocally(result);
+    return;
+  }
+  if (!roomRef) return;
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(roomRef);
+      if (!snap.exists()) throw new Error('room-gone');
+      const data = snap.data();
+      const result = computePassResult(data, myPid);
+      if (!result.ok) throw new Error('cannot-pass');
+      tx.update(roomRef, result.draw
+        ? { state: 'finished', finishedAt: serverTimestamp(), 'game.draw': true }
+        : {
+            'game.turnIndex': result.turnIndex,
+            'game.currentPlayerId': result.currentPlayerId,
+            turnStartedAt: serverTimestamp(),
+          });
+    });
+  } catch (e) {
+    toast('Could not pass turn');
+  }
+}
+
+function applyPassResultLocally(result) {
+  const game = room.game;
+  if (result.draw) {
+    room.state = 'finished';
+    room.finishedAt = localTimestamp();
+    game.draw = true;
+    applyRoom();
+    return;
+  }
+  game.turnIndex = result.turnIndex;
+  game.currentPlayerId = result.currentPlayerId;
+  room.turnStartedAt = localTimestamp();
+  applyRoom();
+  scheduleBotTurnIfNeeded();
+}
+$('btn-pass-turn').addEventListener('click', () => {
+  if (!isMyTurn() || pendingMove) return;
+  passTurn();
+});
+
 // A server-timestamped turnStartedAt (not any device's local clock) is the
 // source of truth for the 30s turn timer — this is the same clock-skew
 // lesson from the other apps: iPhones (and everything else) can't be
@@ -1107,7 +1426,26 @@ async function applyDeadCardSwap(instanceId) {
 // Every connected client independently notices when time is up and tries
 // this transaction; the guard on turnStartedAt makes it a safe no-op for
 // every attempt after the first one that actually lands.
+//
+// Solo has no other clients to race against, so it just applies the timeout
+// directly once its own single timer fires — same guard on turnStartedAt in case
+// something else (a bot move) already moved the turn on in the meantime.
 async function attemptTurnTimeout(expectedStartedAtMillis) {
+  if (solo) {
+    if (!room || !room.turnStartedAt || room.turnStartedAt.toMillis() !== expectedStartedAtMillis) return;
+    if (room.paused || room.state !== 'playing') return;
+    const game = room.game;
+    const order = room.order;
+    const timedOutPlayer = room.players[game.currentPlayerId];
+    const turnIndex = nextTurnIndex(game.turnIndex, order.length);
+    game.turnIndex = turnIndex;
+    game.currentPlayerId = order[turnIndex];
+    game.lastMove = { type: 'timeout', name: timedOutPlayer ? timedOutPlayer.name : 'A player', ts: Date.now() };
+    room.turnStartedAt = localTimestamp();
+    applyRoom();
+    scheduleBotTurnIfNeeded();
+    return;
+  }
   if (!roomRef) return;
   try {
     await runTransaction(db, async (tx) => {
@@ -1362,7 +1700,9 @@ function showWinOverlay(winnerTeam) {
   // from — belt and suspenders, since a stray running interval this late would sit
   // right on top of a "wins!" overlay the whole table is looking at.
   stopTurnTimer();
-  $('win-title').textContent = `🎉 Team ${TEAM_NAMES[winnerTeam]} wins!`;
+  $('win-title').textContent = winnerTeam == null
+    ? "🤝 It's a draw — the deck ran out"
+    : `🎉 Team ${TEAM_NAMES[winnerTeam]} wins!`;
 
   const durationEl = $('stats-duration');
   durationEl.textContent = (room.startedAt && room.finishedAt && room.startedAt.toMillis && room.finishedAt.toMillis)
@@ -1395,9 +1735,16 @@ function showWinOverlay(winnerTeam) {
   const votes = game.playAgainVotes || {};
   const votedCount = order.filter((pid) => votes[pid]).length;
   const iVoted = !!votes[playerId];
-  $('stats-votes').textContent = votedCount > 0 ? `${votedCount} of ${order.length} agreed to play again` : 'Everyone must agree to play again';
-  $('btn-play-again').textContent = iVoted ? 'Waiting for others…' : 'Play Again';
-  $('btn-play-again').disabled = iVoted;
+  if (solo) {
+    // No table to agree with — the button just redeals immediately.
+    $('stats-votes').textContent = '';
+    $('btn-play-again').textContent = 'Play Again';
+    $('btn-play-again').disabled = false;
+  } else {
+    $('stats-votes').textContent = votedCount > 0 ? `${votedCount} of ${order.length} agreed to play again` : 'Everyone must agree to play again';
+    $('btn-play-again').textContent = iVoted ? 'Waiting for others…' : 'Play Again';
+    $('btn-play-again').disabled = iVoted;
+  }
 
   overlay.hidden = false;
 
@@ -1448,7 +1795,21 @@ async function maybeStartNextGame() {
 }
 
 $('btn-play-again').addEventListener('click', async () => {
-  if (!room || !roomRef) return;
+  if (!room) return;
+  if (solo) {
+    // No one else to vote — deal straight away.
+    const teamCount = room.settings.teamCount;
+    const order = room.order && room.order.length ? room.order : Object.keys(room.players);
+    room.state = 'playing';
+    room.paused = false;
+    room.pausedBy = null;
+    dealNewGameLocally(order, teamCount);
+    $('win-overlay').hidden = true;
+    applyRoom();
+    scheduleBotTurnIfNeeded();
+    return;
+  }
+  if (!roomRef) return;
   await updateDoc(roomRef, { [`game.playAgainVotes.${playerId}`]: true }).catch(() => toast('Could not register vote'));
 });
 $('btn-quit-game').addEventListener('click', () => { $('win-overlay').hidden = true; leaveRoom(); });

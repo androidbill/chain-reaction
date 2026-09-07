@@ -44,6 +44,20 @@
     <input type="text" id="input-code" placeholder="Room code" maxlength="5" style="text-transform:uppercase;letter-spacing:3px;text-align:center;">
     <button class="btn secondary" id="btn-join">Join Game</button>
   </div>
+
+  <div class="home-card">
+    <h3>Play Solo</h3>
+    <div class="seg" id="solo-team-count-seg">
+      <button data-teams="2" class="active">2 Teams</button>
+      <button data-teams="3">3 Teams</button>
+    </div>
+    <div class="seg" id="solo-difficulty-seg">
+      <button data-diff="easy">Easy</button>
+      <button data-diff="medium" class="active">Medium</button>
+      <button data-diff="hard">Hard</button>
+    </div>
+    <button class="btn secondary" id="btn-play-solo">Play Solo</button>
+  </div>
 </div>
 
 <!-- ===================== LOBBY ===================== -->
@@ -87,6 +101,7 @@
     <div class="hand-footer" id="hand-footer">
       <span class="hint" id="hand-hint">Tap a highlighted space to play a card</span>
       <button class="btn secondary" id="btn-dead-card" hidden>No plays — swap a card</button>
+      <button class="btn secondary" id="btn-pass-turn" hidden>No cards left — pass turn</button>
     </div>
     <div class="undo-bar" id="undo-bar" hidden>
       <span id="undo-text">Card played</span>

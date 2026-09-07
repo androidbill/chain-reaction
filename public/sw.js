@@ -16,6 +16,10 @@ const CORE = [
   'styles.css',
   'manifest.webmanifest',
   'icons/icon-192.png',
+  'sounds/turn-sound.mp3',
+  'sounds/card-lay-sound.mp3',
+  'sounds/sequence-sound.mp3',
+  'sounds/win-sound.mp3',
 ];
 
 self.addEventListener('install', (event) => {

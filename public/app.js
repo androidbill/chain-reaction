@@ -63,6 +63,7 @@ let pendingMoveTimeout = null;
 let lastSeenMoveTs = undefined; // undefined = not initialized yet for this room
 let wasMyTurn = undefined; // undefined = not initialized yet for this room
 let lastAnnouncedPid = undefined; // undefined = not initialized yet for this room
+let lastCompletedLinesCount = undefined; // undefined = not initialized yet for this room
 let celebratedFinishKey = null;
 let celebrating = false;
 let timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
@@ -103,46 +104,11 @@ function makeCode() {
   return s;
 }
 
-// ---------------- Notification sounds (synthesized, no audio assets) ----------------
-let audioCtx = null;
-function ensureAudio() {
-  if (!audioCtx) {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (Ctx) audioCtx = new Ctx();
-  }
-  if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-}
-// Browsers block audio until a user gesture — unlock on the first tap
-// anywhere so sounds are ready by the time a turn/move actually happens.
-document.addEventListener('pointerdown', ensureAudio, { once: true });
-
-function playTone(freq, { start = 0, duration = 0.16, type = 'sine', volume = 0.22 } = {}) {
-  if (!audioCtx) return;
-  const t0 = audioCtx.currentTime + start;
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, t0);
-  gain.gain.setValueAtTime(0, t0);
-  gain.gain.linearRampToValueAtTime(volume, t0 + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
-  osc.connect(gain).connect(audioCtx.destination);
-  osc.start(t0);
-  osc.stop(t0 + duration + 0.02);
-}
-// "It's your turn" — HexColony's actual sfx.yourTurn(), ported in full (compressor,
-// room reverb, detuned "fat" oscillators, real envelopes — see audio.js), not just an
-// approximation of its notes. Runs through its own small AudioContext separate from
-// playTone()'s below, since that one is a much simpler, unrelated synth used only for
-// the move tick.
-function playTurnSound() {
-  sfx.yourTurn();
-}
-// A single short, low-key tick for any card played (place, remove, or wild).
-function playMoveSound() {
-  ensureAudio();
-  playTone(392, { start: 0, duration: 0.1, type: 'triangle', volume: 0.16 });
-}
+// ---------------- Notification sounds (public/sounds/*.mp3, see audio.js) ----------------
+function playTurnSound() { sfx.yourTurn(); }
+function playMoveSound() { sfx.cardLay(); }
+function playSequenceSound() { sfx.sequence(); }
+function playWinSound() { sfx.win(); }
 
 // ---------------- Version check / update banner ----------------
 async function checkForUpdate() {
@@ -157,6 +123,7 @@ function announceUpdate() { $('update-banner').hidden = false; }
 const CORE_FILES = [
   'index.html', 'app.js', 'board.js', 'render.js', 'cards.js', 'rules.js', 'audio.js', 'bot.js',
   'firebase-config.js', 'version.js', 'styles.css', 'manifest.webmanifest',
+  'sounds/turn-sound.mp3', 'sounds/card-lay-sound.mp3', 'sounds/sequence-sound.mp3', 'sounds/win-sound.mp3',
 ];
 async function fullRefresh() {
   try {
@@ -518,6 +485,7 @@ function enterRoom(code) {
   lastSeenMoveTs = undefined;
   wasMyTurn = undefined;
   lastAnnouncedPid = undefined;
+  lastCompletedLinesCount = undefined;
   lastVotesSignature = null;
   celebratedFinishKey = null;
   celebrating = false;
@@ -995,6 +963,7 @@ function startSolo(teamCount, difficulty) {
   lastSeenMoveTs = undefined;
   wasMyTurn = undefined;
   lastAnnouncedPid = undefined;
+  lastCompletedLinesCount = undefined;
   celebratedFinishKey = null;
   celebrating = false;
   clockOffset = 0; // nothing but this device involved — no clock skew to correct for
@@ -1200,6 +1169,13 @@ function renderGame() {
   if (isMyTurn() !== wasMyTurn) {
     if (isMyTurn() && wasMyTurn !== undefined) playTurnSound();
     wasMyTurn = isMyTurn();
+  }
+
+  const completedLinesCount = (game.completedLines || []).length;
+  if (completedLinesCount !== lastCompletedLinesCount) {
+    const isFirstLoad = lastCompletedLinesCount === undefined;
+    if (!isFirstLoad && completedLinesCount > lastCompletedLinesCount) playSequenceSound();
+    lastCompletedLinesCount = completedLinesCount;
   }
 
   const pauseOverlay = $('pause-overlay');
@@ -1856,6 +1832,7 @@ function formatDuration(ms) {
 // beyond winnerTeam itself, and this recomputes the same way every other render does.
 const WIN_CELEBRATION_MS = 3000;
 function runWinCelebration(game, winnerTeam, onDone) {
+  playWinSound();
   const teamCount = room.settings.teamCount;
   const sequences = computeSequences(game.board, teamCount).filter((s) => s.team === winnerTeam);
   boardView.celebrateSequences(sequences.map((s) => s.cells), TEAM_COLOR[winnerTeam]);

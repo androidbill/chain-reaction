@@ -8,7 +8,7 @@ import { firebaseConfig } from './firebase-config.js';
 import { APP_VERSION } from './version.js';
 import {
   cardRank, cardSuit, SUIT_SYMBOL, SUIT_COLOR, isJack, isTwoEyedJack, isOneEyedJack,
-  instanceCode, buildShuffledDeck, handSizeForTeamCount, sequencesNeededToWin,
+  instanceCode, buildShuffledDeck, handSizeForPlayerCount, sequencesNeededToWin,
 } from './cards.js';
 import {
   isDeadCard, validateMove, findSequences, lockedIndicesFrom, checkWinner, nextTurnIndex,
@@ -996,7 +996,7 @@ $('btn-start-game').addEventListener('click', async () => {
 
 function dealNewGame(order, teamCount) {
   const deck = buildShuffledDeck(Date.now());
-  const handSize = handSizeForTeamCount(teamCount);
+  const handSize = handSizeForPlayerCount(order.length);
   const hands = {};
   for (const pid of order) {
     hands[pid] = deck.splice(0, handSize);

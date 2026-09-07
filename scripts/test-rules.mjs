@@ -10,10 +10,20 @@ import {
   ambientHighlightSet,
   autoResolveTargets,
 } from '../public/rules.js';
-import { boardIndicesFor, CORNER_INDICES } from '../public/cards.js';
+import { boardIndicesFor, CORNER_INDICES, handSizeForPlayerCount } from '../public/cards.js';
 
 function emptyBoard() {
   return new Array(100).fill(null);
+}
+
+// 0. Hand size follows player count (real Sequence's published table), not team
+// count — every named value matches exactly, and the in-between counts this app
+// allows but the table doesn't name fall back to the next lower one.
+{
+  const expected = { 2: 7, 3: 6, 4: 6, 5: 5, 6: 5, 7: 4, 8: 4, 9: 4, 10: 3, 11: 3, 12: 3 };
+  for (const [players, size] of Object.entries(expected)) {
+    assert.equal(handSizeForPlayerCount(Number(players)), size, `${players} players`);
+  }
 }
 
 // 1. Normal placement: card's two board spots are legal targets when empty.

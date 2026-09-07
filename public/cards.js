@@ -100,8 +100,18 @@ export function instanceCode(instanceId) {
   return instanceId.split('#')[0];
 }
 
-export function handSizeForTeamCount(teamCount) {
-  return teamCount >= 3 ? 6 : 7;
+// Real Sequence keys hand size off the number of PLAYERS at the table, not the
+// number of teams — the standard rule table only names a handful of player counts
+// (2:7, 3:6, 4:6, 6:5, 8:4, 9:4, 10:3, 12:3), so counts this app allows but that
+// table doesn't (5, 7, 11, since teams here can be any size rather than fixed
+// even splits) fall back to the next lower named count's size — a clean step
+// function that matches every published value exactly.
+export function handSizeForPlayerCount(playerCount) {
+  if (playerCount <= 2) return 7;
+  if (playerCount <= 4) return 6;
+  if (playerCount <= 6) return 5;
+  if (playerCount <= 9) return 4;
+  return 3; // 10-12
 }
 
 export function sequencesNeededToWin(teamCount) {

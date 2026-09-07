@@ -458,14 +458,41 @@ function subscribeRoom() {
   unsubRoom = onSnapshot(roomRef, { includeMetadataChanges: true }, (snap) => {
     if (!snap.exists()) {
       if (snap.metadata.fromCache) return;
-      toast('The room was closed');
-      leaveRoom();
+      confirmRoomGone(roomRef);
       return;
     }
     room = snap.data();
     noteFreshRoom(room, !snap.metadata.fromCache);
     applyRoom();
   }, () => {});
+}
+
+// Nothing in this app ever deletes a room document — there's no host-kick, no expiry
+// sweep, nothing. So a listener reporting a fresh (non-cached) "document doesn't
+// exist" should be exceedingly rare, and getting it wrong is expensive: it evicts the
+// player mid-game and clears their resume state, with no way back in short of the
+// room code. A reconnecting long-polling stream (which this app forces, for iOS
+// reliability — see initializeFirestore above) can plausibly surface a stale/empty
+// response transiently on reconnect, which would look identical to this. Requiring
+// an independent, direct server read to agree before actually treating the room as
+// gone costs one extra round trip on the rare real case and prevents the listener's
+// word alone from being able to kick anyone.
+async function confirmRoomGone(ref) {
+  try {
+    const snap = await getDocFromServer(ref);
+    if (snap.exists()) {
+      // False alarm from the listener — the room is fine. Pick the real state back
+      // up rather than just dropping it; the listener should also self-correct on
+      // its own next delivery, but there's no reason to wait for that.
+      if (roomRef === ref) { room = snap.data(); noteFreshRoom(room, true); applyRoom(); }
+      return;
+    }
+  } catch (e) {
+    return; // Couldn't confirm either way — never evict on an inconclusive check.
+  }
+  if (roomRef !== ref) return; // left or switched rooms while this was in flight
+  toast('The room was closed');
+  leaveRoom();
 }
 
 // A backgrounded phone's realtime stream can go stale and not notice for a while once the

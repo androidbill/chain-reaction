@@ -40,19 +40,31 @@ function loadBuffer(url) {
   return bufferPromises.get(url);
 }
 
+function playBuffer(buffer, vol) {
+  if (!buffer) return;
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const g = ctx.createGain();
+  g.gain.value = vol;
+  src.connect(g).connect(master);
+  src.start();
+}
+
 function playSample(url, vol = 1) {
   try {
     unlock();
     if (!ctx) return;
-    loadBuffer(url).then((buffer) => {
-      if (!buffer) return;
-      const src = ctx.createBufferSource();
-      src.buffer = buffer;
-      const g = ctx.createGain();
-      g.gain.value = vol;
-      src.connect(g).connect(master);
-      src.start();
-    });
+    // ctx.resume() (kicked off by unlock() above) is asynchronous — a context still
+    // technically 'suspended' at the exact instant a source is start()ed just
+    // silently produces no sound rather than queuing it, which is exactly why the
+    // very first cue of a session (fired right on the heels of the gesture that
+    // created/resumed the context) could go missing while every later one, by which
+    // point resume() has long since finished, played fine. Waiting for the same
+    // resume() promise unlock() already started means the sound is only ever
+    // scheduled once the context is actually producing audio.
+    const play = () => loadBuffer(url).then((buffer) => playBuffer(buffer, vol));
+    if (ctx.state === 'running') play();
+    else ctx.resume().then(play, play);
   } catch { /* fine */ }
 }
 

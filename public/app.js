@@ -152,23 +152,14 @@ function playMoveSound(lastMove) {
 function playSequenceSound() { sfx.sequence(); }
 function playWinSound() { sfx.win(); }
 
-// A brief version of the win screen's sequence pill — for a line completed mid-game
-// rather than a game-ending one, just a couple seconds of highlight on the board
-// itself instead of the full celebration overlay.
-const SEQUENCE_CELEBRATION_MS = 2200;
-let sequenceCelebrateTimeoutId = null;
-function celebrateNewSequences(cellsList, color) {
+// Every completed sequence stays outlined with its pill for the rest of the game
+// (the cells are locked anyway, so this is just making that permanent, visually) —
+// recomputed from the board itself on every render rather than tracked as an
+// incremental diff, so it's correct immediately on load/rejoin too, not just for
+// lines completed after this client started watching.
+function syncCompletedLinePills(sequences) {
   if (!boardView) return;
-  clearTimeout(sequenceCelebrateTimeoutId);
-  boardView.celebrateSequences(cellsList, color);
-  sequenceCelebrateTimeoutId = setTimeout(() => {
-    sequenceCelebrateTimeoutId = null;
-    boardView.clearCelebration();
-  }, SEQUENCE_CELEBRATION_MS);
-}
-function stopSequenceCelebration() {
-  clearTimeout(sequenceCelebrateTimeoutId);
-  sequenceCelebrateTimeoutId = null;
+  boardView.setPersistentSequences(sequences.map((s) => ({ cells: s.cells, color: TEAM_COLOR[s.team] })));
 }
 
 // ---------------- Version check / update banner ----------------
@@ -661,7 +652,6 @@ function leaveRoom() {
   stopClockPing();
   clearTimeout(botTimeoutId);
   stopPlayAgainRetry();
-  stopSequenceCelebration();
   if (solo) clearSoloRoom();
   solo = false;
   roomRef = null;
@@ -1219,6 +1209,7 @@ function renderGame() {
   const teamCount = room.settings.teamCount;
   const sequences = computeSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
+  syncCompletedLinePills(sequences);
 
   // Update the timer before anything canvas- or DOM-heavy runs below, so a render
   // error further down (a bad board index, a transient canvas sizing issue) can never
@@ -1289,17 +1280,7 @@ function renderGame() {
   const completedLinesCount = (game.completedLines || []).length;
   if (completedLinesCount !== lastCompletedLinesCount) {
     const isFirstLoad = lastCompletedLinesCount === undefined;
-    if (!isFirstLoad && completedLinesCount > lastCompletedLinesCount) {
-      playSequenceSound();
-      // The winning move's own line is already highlighted (and held far longer, with
-      // confetti) by runWinCelebration right after this — celebrating it here too would
-      // just be two overlapping animations racing each other, so this is only for a
-      // sequence completed on a move that doesn't end the game.
-      if (game.winnerTeam == null) {
-        const newLines = (game.completedLines || []).slice(lastCompletedLinesCount).filter((l) => l.cells);
-        if (newLines.length > 0) celebrateNewSequences(newLines.map((l) => l.cells), TEAM_COLOR[newLines[0].team]);
-      }
-    }
+    if (!isFirstLoad && completedLinesCount > lastCompletedLinesCount) playSequenceSound();
     lastCompletedLinesCount = completedLinesCount;
   }
 
@@ -1978,9 +1959,6 @@ function formatDuration(ms) {
 const WIN_CELEBRATION_MS = 3000;
 function runWinCelebration(game, winnerTeam, onDone) {
   playWinSound();
-  // A still-pending mid-game sequence celebration (see celebrateNewSequences) would
-  // otherwise clear this one out from under it a couple seconds in.
-  stopSequenceCelebration();
   const teamCount = room.settings.teamCount;
   const sequences = computeSequences(game.board, teamCount).filter((s) => s.team === winnerTeam);
   boardView.celebrateSequences(sequences.map((s) => s.cells), TEAM_COLOR[winnerTeam]);
@@ -1993,7 +1971,11 @@ function runWinCelebration(game, winnerTeam, onDone) {
   showWinConfetti(names, TEAM_COLOR[winnerTeam]);
 
   setTimeout(() => {
-    boardView.clearCelebration();
+    // Back to every completed line (not just the winner's), same as ordinary
+    // gameplay rendering — so if the win/stats screen is later dragged down to peek
+    // at the board (see the win-overlay drag handle), the pills are still there
+    // instead of the win celebration having wiped them.
+    syncCompletedLinePills(computeSequences(game.board, teamCount));
     hideWinConfetti();
     onDone();
   }, WIN_CELEBRATION_MS);

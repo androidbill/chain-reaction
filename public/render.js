@@ -157,6 +157,15 @@ export class BoardView {
     this.celebrating = [];
     this.draw();
   }
+  // Every completed sequence's pill, each in its own team's colour — called on every
+  // render with the board's current full sequence list, so it's always exactly
+  // right rather than tracked as a diff. Same underlying array/draw as
+  // celebrateSequences() above; this just takes pre-paired {cells, color} entries
+  // since it's usually mixing colours from more than one team at once.
+  setPersistentSequences(list) {
+    this.celebrating = list;
+    this.draw();
+  }
 
   // Animates a dragged chip's offset back to (0,0) once the finger lifts, then clears
   // the drag — the "zooms back over the card" half of the gesture. Reads its distance

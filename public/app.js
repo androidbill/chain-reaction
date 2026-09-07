@@ -114,6 +114,25 @@ function playMoveSound(lastMove) {
 function playSequenceSound() { sfx.sequence(); }
 function playWinSound() { sfx.win(); }
 
+// A brief version of the win screen's sequence pill — for a line completed mid-game
+// rather than a game-ending one, just a couple seconds of highlight on the board
+// itself instead of the full celebration overlay.
+const SEQUENCE_CELEBRATION_MS = 2200;
+let sequenceCelebrateTimeoutId = null;
+function celebrateNewSequences(cellsList, color) {
+  if (!boardView) return;
+  clearTimeout(sequenceCelebrateTimeoutId);
+  boardView.celebrateSequences(cellsList, color);
+  sequenceCelebrateTimeoutId = setTimeout(() => {
+    sequenceCelebrateTimeoutId = null;
+    boardView.clearCelebration();
+  }, SEQUENCE_CELEBRATION_MS);
+}
+function stopSequenceCelebration() {
+  clearTimeout(sequenceCelebrateTimeoutId);
+  sequenceCelebrateTimeoutId = null;
+}
+
 // ---------------- Version check / update banner ----------------
 async function checkForUpdate() {
   try {
@@ -570,6 +589,7 @@ function leaveRoom() {
   stopClockPing();
   clearTimeout(botTimeoutId);
   stopPlayAgainRetry();
+  stopSequenceCelebration();
   solo = false;
   roomRef = null;
   roomCode = null;
@@ -1179,7 +1199,17 @@ function renderGame() {
   const completedLinesCount = (game.completedLines || []).length;
   if (completedLinesCount !== lastCompletedLinesCount) {
     const isFirstLoad = lastCompletedLinesCount === undefined;
-    if (!isFirstLoad && completedLinesCount > lastCompletedLinesCount) playSequenceSound();
+    if (!isFirstLoad && completedLinesCount > lastCompletedLinesCount) {
+      playSequenceSound();
+      // The winning move's own line is already highlighted (and held far longer, with
+      // confetti) by runWinCelebration right after this — celebrating it here too would
+      // just be two overlapping animations racing each other, so this is only for a
+      // sequence completed on a move that doesn't end the game.
+      if (game.winnerTeam == null) {
+        const newLines = (game.completedLines || []).slice(lastCompletedLinesCount).filter((l) => l.cells);
+        if (newLines.length > 0) celebrateNewSequences(newLines.map((l) => l.cells), TEAM_COLOR[newLines[0].team]);
+      }
+    }
     lastCompletedLinesCount = completedLinesCount;
   }
 
@@ -1401,15 +1431,21 @@ function computeMoveResult(data, myPid, instanceId, targetIndex) {
 
   // Did this move complete one or more new sequences for the mover's
   // team? findSequences already resolves overlap so this reflects
-  // legitimately distinct lines, not just any run of 5.
+  // legitimately distinct lines, not just any run of 5. Matched by cell
+  // set (not just count) so the actual new sequence(s) can be highlighted
+  // on the board the moment they're completed, not just at game end.
+  const beforeKeys = new Set(
+    sequencesBefore.filter((s) => s.team === team).map((s) => s.cells.slice().sort((a, b) => a - b).join(',')),
+  );
+  const newSequences = sequences.filter((s) => s.team === team && !beforeKeys.has(s.cells.slice().sort((a, b) => a - b).join(',')));
   const countBefore = countSequencesByTeam(sequencesBefore, teamCount)[team];
-  const countAfter = countSequencesByTeam(sequences, teamCount)[team];
   const completedLines = (game.completedLines || []).slice();
   let completedLine = null;
-  for (let ord = countBefore + 1; ord <= countAfter; ord++) {
-    completedLines.push({ team, playerId: myPid, playerName: data.players[myPid].name, ordinal: ord, ts: Date.now() });
+  newSequences.forEach((seq, i) => {
+    const ord = countBefore + 1 + i;
+    completedLines.push({ team, playerId: myPid, playerName: data.players[myPid].name, ordinal: ord, cells: seq.cells, ts: Date.now() });
     completedLine = ord;
-  }
+  });
 
   const lastMove = {
     type: 'card',
@@ -1838,6 +1874,9 @@ function formatDuration(ms) {
 const WIN_CELEBRATION_MS = 3000;
 function runWinCelebration(game, winnerTeam, onDone) {
   playWinSound();
+  // A still-pending mid-game sequence celebration (see celebrateNewSequences) would
+  // otherwise clear this one out from under it a couple seconds in.
+  stopSequenceCelebration();
   const teamCount = room.settings.teamCount;
   const sequences = computeSequences(game.board, teamCount).filter((s) => s.team === winnerTeam);
   boardView.celebrateSequences(sequences.map((s) => s.cells), TEAM_COLOR[winnerTeam]);

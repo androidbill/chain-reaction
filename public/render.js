@@ -490,7 +490,7 @@ export class BoardView {
     // always on top, regardless of which direction it was dragged.
     const dragOff = (this.peekDrag && this.peekDrag.index === index) ? this.peekDrag : null;
     if (team != null) {
-      const r = Math.min(w, h) * 0.34;
+      const r = Math.min(w, h) * 0.425;
       if (dragOff) {
         this._pendingDragChip = {
           cx: sx + w / 2 + dragOff.dx, cy: sy + h / 2 + dragOff.dy, r, team, locked: this.locked.has(index),

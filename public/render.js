@@ -5,7 +5,6 @@ import { isCorner } from './cards.js';
 import { cardSuit, cardRank, SUIT_SYMBOL, SUIT_COLOR } from './cards.js';
 
 const TEAM_COLOR = ['#e0473c', '#3b7fe0', '#3fb56b']; // red, blue, green
-const TEAM_COLOR_SOFT = ['rgba(224,71,60,0.22)', 'rgba(59,127,224,0.22)', 'rgba(63,181,107,0.22)'];
 
 export class BoardView {
   constructor(canvas, { onPick } = {}) {
@@ -326,4 +325,4 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-export { TEAM_COLOR, TEAM_COLOR_SOFT };
+export { TEAM_COLOR };

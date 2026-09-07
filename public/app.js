@@ -84,6 +84,44 @@ function localTimestamp(ms = Date.now()) {
   return { toMillis: () => ms };
 }
 
+// ---------------- Solo game persistence ----------------
+// Solo never touches Firestore, so unlike an online room (resumed via its code —
+// see 'cr_room' below) its entire state only ever lived in memory: a page refresh
+// (including the "Refresh" the update banner itself asks for) silently threw the
+// game away. Saved as plain JSON after every change, with the three
+// localTimestamp() wrapper objects (turnStartedAt/startedAt/finishedAt — see above)
+// swapped for a plain millis number on the way out and rebuilt on the way in, since
+// their toMillis function can't survive JSON.stringify on its own.
+const SOLO_STORAGE_KEY = 'cr_solo';
+function soloJsonReplacer(key, value) {
+  if (value && typeof value === 'object' && typeof value.toMillis === 'function') {
+    return { __ts: value.toMillis() };
+  }
+  return value;
+}
+function soloJsonReviver(key, value) {
+  if (value && typeof value === 'object' && typeof value.__ts === 'number') {
+    return localTimestamp(value.__ts);
+  }
+  return value;
+}
+function saveSoloRoom() {
+  if (!solo || !room) return;
+  try {
+    localStorage.setItem(SOLO_STORAGE_KEY, JSON.stringify({ room, soloDifficulty }, soloJsonReplacer));
+  } catch (e) { /* storage full or unavailable — the game just won't survive a refresh */ }
+}
+function loadSoloRoom() {
+  try {
+    const raw = localStorage.getItem(SOLO_STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw, soloJsonReviver);
+  } catch (e) { return null; }
+}
+function clearSoloRoom() {
+  localStorage.removeItem(SOLO_STORAGE_KEY);
+}
+
 // ---------------- Small helpers ----------------
 function toast(msg, ms = 2200) {
   const el = $('toast');
@@ -624,6 +662,7 @@ function leaveRoom() {
   clearTimeout(botTimeoutId);
   stopPlayAgainRetry();
   stopSequenceCelebration();
+  if (solo) clearSoloRoom();
   solo = false;
   roomRef = null;
   roomCode = null;
@@ -638,6 +677,7 @@ $('btn-leave-lobby').addEventListener('click', leaveRoom);
 // ---------------- Room state -> screens ----------------
 function applyRoom() {
   if (!room) return;
+  if (solo) saveSoloRoom();
   setTeamColors((room.settings && room.settings.teamColors) || DEFAULT_TEAM_COLORS);
   updateGameKebabVisibility();
   // The next round already started (or this client left the finished game some other
@@ -1012,9 +1052,12 @@ function dealNewGameLocally(order, teamCount) {
   room.game = dealNewGame(order, teamCount);
 }
 
-function startSolo(teamCount, difficulty) {
+// Shared setup for both starting a fresh solo game and resuming a saved one — every
+// tracking var that's keyed "per room session" needs to start clean either way, or
+// state left over from whatever was on screen before (an online room, another solo
+// game) reads as stale/mismatched against the newly-loaded room.
+function enterSoloSession() {
   solo = true;
-  soloDifficulty = difficulty;
   roomCode = null;
   roomRef = null;
   if (unsubRoom) { unsubRoom(); unsubRoom = null; }
@@ -1027,6 +1070,11 @@ function startSolo(teamCount, difficulty) {
   celebrating = false;
   clockOffset = 0; // nothing but this device involved — no clock skew to correct for
   localStorage.removeItem('cr_room'); // solo has no code to resume by
+}
+
+function startSolo(teamCount, difficulty) {
+  enterSoloSession();
+  soloDifficulty = difficulty;
 
   const usedNames = [playerName];
   const players = { [playerId]: { name: playerName, team: 0, joinedAt: 0 } };
@@ -1050,6 +1098,14 @@ function startSolo(teamCount, difficulty) {
     game: null,
   };
   dealNewGameLocally(order, teamCount);
+  applyRoom();
+  scheduleBotTurnIfNeeded();
+}
+
+function resumeSolo(saved) {
+  enterSoloSession();
+  soloDifficulty = saved.soloDifficulty || 'medium';
+  room = saved.room;
   applyRoom();
   scheduleBotTurnIfNeeded();
 }
@@ -2154,4 +2210,9 @@ $('btn-quit-game').addEventListener('click', () => { stopPlayAgainRetry(); $('wi
 watchPublishedVersion();
 checkForUpdate();
 const savedRoom = localStorage.getItem('cr_room');
-if (savedRoom) enterRoom(savedRoom);
+if (savedRoom) {
+  enterRoom(savedRoom);
+} else {
+  const savedSolo = loadSoloRoom();
+  if (savedSolo && savedSolo.room) resumeSolo(savedSolo);
+}

@@ -67,11 +67,23 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
 .game-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; padding-top: calc(10px + var(--safe-t)); background: var(--panel); border-bottom: 1px solid var(--line); z-index: 20; }
 .turn-banner { font-weight: 700; font-size: 14.5px; }
 .turn-banner .team-dot { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+/* Floating HUD bubble over the board, ported from HexColony's board-hud: a white
+   pill with its own shadow/blur, sitting above the canvas rather than living in the
+   nav strip. pointer-events: none so it never steals a tap meant for the board. */
 .turn-timer {
-  font-weight: 800; font-size: 15px; font-variant-numeric: tabular-nums;
-  color: var(--text-dim); min-width: 34px; text-align: right;
+  position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+  z-index: 22; pointer-events: none;
+  padding: 6px 16px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(13, 27, 40, 0.14);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(8px);
+  font-weight: 800; font-size: 16px; font-variant-numeric: tabular-nums;
+  color: #22262e; min-width: 30px; text-align: center;
 }
-.turn-timer.low { color: var(--team-0); }
+.turn-timer.low { color: #b8302a; animation: timer-tick 1s steps(2) infinite; }
+@keyframes timer-tick { 50% { opacity: 0.45; } }
 .players-strip {
   display: flex; gap: 14px; overflow-x: auto; padding: 7px 14px;
   background: var(--panel); border-bottom: 1px solid var(--line); z-index: 19;

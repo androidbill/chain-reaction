@@ -1263,28 +1263,20 @@ function renderGame() {
     lastSeenMoveTs = game.lastMove.ts;
     if (!isFirstLoad) {
       const move = game.lastMove;
-      // A completed line is bigger news than which card caused it, so it takes over
-      // the shoutout even on an otherwise-special card rather than showing both.
-      const isSpecial = move.type === 'card' && !move.completedLine && (isTwoEyedJack(move.code) || isOneEyedJack(move.code));
-      const preAnnounceMs = isSpecial ? MOVE_ANNOUNCE_MS : 0;
-      if (isSpecial) {
-        // Called out on its own, ahead of the card actually appearing, since a wild
-        // or a removal changes the board in a way that's easy to miss at a glance
-        // (a chip vanishing, a card that isn't going where its rank/suit implies) —
-        // worth a beat of "look, this is what just happened" before the visuals.
-        const mover = room.players[move.playerId];
-        const color = TEAM_COLOR[mover ? mover.team : 0];
-        showMoveAnnounce(`${move.name} plays ${isTwoEyedJack(move.code) ? 'Wild' : 'Removal'}`, color);
-      }
+      // The announcement pill always shows and fully disappears before anything
+      // else about this move happens — the card sound/flash/fly-animation used to
+      // start at the exact same instant as the shoutout for an ordinary card play,
+      // which meant the pill was fading out mid-animation instead of being read on
+      // its own first.
+      showShoutout(move);
       scheduleMoveEffects(() => {
-        if (!isSpecial) showShoutout(move);
         if (move.type === 'card') {
           playMoveSound(move);
           boardView.flashCell(move.targetIndex);
           showCardFly(move);
         }
-      }, preAnnounceMs);
-      if (move.type === 'card') cardFlyStillRunningMs = preAnnounceMs + CARD_FLY_TOTAL_MS;
+      }, MOVE_ANNOUNCE_MS);
+      if (move.type === 'card') cardFlyStillRunningMs = MOVE_ANNOUNCE_MS + CARD_FLY_TOTAL_MS;
     }
   }
 
@@ -1885,10 +1877,16 @@ function ordinal(n) {
 function showShoutout(move) {
   const mover = room.players[move.playerId];
   const color = TEAM_COLOR[mover ? mover.team : 0];
+  // A completed line is bigger news than which card caused it, so it takes over the
+  // announcement even on an otherwise wild/removal card rather than showing both.
   const text = move.type === 'timeout'
     ? `${move.name}'s time ran out!`
     : move.completedLine
     ? `${move.name} completed their ${ordinal(move.completedLine)} line!`
+    : isTwoEyedJack(move.code)
+    ? `${move.name} plays Wild`
+    : isOneEyedJack(move.code)
+    ? `${move.name} plays Removal`
     : `${move.name} plays ${cardRank(move.code)}${SUIT_SYMBOL[cardSuit(move.code)]}`;
   showMoveAnnounce(text, color);
 }

@@ -28,25 +28,30 @@ body {
 [hidden] { display: none !important; }
 
 /* ---------- Home ---------- */
-#screen-home { align-items: center; justify-content: center; padding: 24px; padding-top: calc(24px + var(--safe-t)); gap: 18px; text-align: center; }
-.home-logo { font-size: 40px; }
-.home-title { font-size: 32px; font-weight: 800; letter-spacing: -0.5px; }
-.home-version { color: var(--text-dim); font-size: 13px; }
-.home-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 20px; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 12px; }
-.home-card h3 { margin: 0 0 4px; font-size: 15px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
+/* justify-content:flex-start (not center) so that if a very short/zoomed viewport
+   still can't fit everything, it's the bottom that scrolls off first rather than
+   the top getting clipped by a centered overflow — and overflow-y:auto is a safety
+   net for that case, though the sizing below is tuned to avoid ever needing it on a
+   normal phone screen. */
+#screen-home { align-items: center; justify-content: flex-start; overflow-y: auto; padding: 12px; padding-top: calc(12px + var(--safe-t)); padding-bottom: calc(12px + var(--safe-b)); gap: 8px; text-align: center; }
+.home-logo { font-size: 26px; line-height: 1; }
+.home-title { font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }
+.home-version { color: var(--text-dim); font-size: 11px; }
+.home-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 10px 14px; width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 6px; }
+.home-card h3 { margin: 0; font-size: 11.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; }
 input[type=text] {
-  width: 100%; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line);
+  width: 100%; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line);
   background: var(--panel-2); color: var(--text); font-size: 16px;
 }
 input[type=text]:focus { outline: 2px solid var(--accent); }
 .seg { display: flex; gap: 8px; }
 .seg button {
-  flex: 1; padding: 10px; border-radius: 10px; border: 1px solid var(--line);
-  background: var(--panel-2); color: var(--text); font-weight: 600; font-size: 14px;
+  flex: 1; padding: 7px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--text); font-weight: 600; font-size: 13px;
 }
 .seg button.active { background: var(--accent); color: #14161c; border-color: var(--accent); }
 .btn {
-  padding: 13px 16px; border-radius: 12px; border: none; font-weight: 700; font-size: 15.5px;
+  padding: 9px 16px; border-radius: 12px; border: none; font-weight: 700; font-size: 14.5px;
   background: var(--accent); color: #14161c;
 }
 .btn.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }

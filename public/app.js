@@ -1,6 +1,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import {
-  getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, runTransaction, serverTimestamp,
+  initializeFirestore, doc, getDoc, getDocFromServer, setDoc, updateDoc, onSnapshot,
+  runTransaction, serverTimestamp,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
 import { firebaseConfig } from './firebase-config.js';
@@ -16,7 +17,15 @@ import {
 import { BoardView, TEAM_COLOR } from './render.js';
 
 const fbApp = initializeApp(firebaseConfig);
-const db = getFirestore(fbApp);
+// iOS Safari (including installed PWAs) frequently stalls the SDK's default WebChannel
+// stream for 10-20s on a cold connection — Android/Chrome never shows this. Auto-detecting
+// long polling, and doing it over XHR rather than fetch streams (which Safari's networking
+// stack handles poorly under a service worker), makes the very first connection reliable
+// instead of waiting out a timeout-and-fallback dance.
+const db = initializeFirestore(fbApp, {
+  experimentalAutoDetectLongPolling: true,
+  useFetchStreams: false,
+});
 
 const $ = (id) => document.getElementById(id);
 const TEAM_NAMES = ['Red', 'Blue', 'Green'];
@@ -356,6 +365,16 @@ function enterRoom(code) {
   wasMyTurn = undefined;
   lastVotesSignature = null;
   localStorage.setItem('cr_room', code);
+  subscribeRoom();
+  // The listener above can still be the one that stalls on a cold iOS connection. A direct
+  // server read runs over a fresh request rather than the long-lived stream, so it lands
+  // even while that stream is still negotiating — the first paint stops depending on it.
+  getDocFromServer(roomRef).then((snap) => {
+    if (snap.exists()) { room = snap.data(); applyRoom(); }
+  }).catch(() => {});
+}
+
+function subscribeRoom() {
   if (unsubRoom) unsubRoom();
   unsubRoom = onSnapshot(roomRef, (snap) => {
     if (!snap.exists()) {
@@ -367,6 +386,19 @@ function enterRoom(code) {
     applyRoom();
   }, () => {});
 }
+
+// A backgrounded phone's realtime stream can go stale and not notice for a while once the
+// tab is foregrounded again — the same stall that hits a cold connection can recur after a
+// lock/unlock. Re-attaching the listener and forcing one server read on return covers both:
+// whichever one is currently wedged gets replaced/refreshed immediately instead of waiting
+// on the SDK's own retry timing.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !roomRef) return;
+  subscribeRoom();
+  getDocFromServer(roomRef).then((snap) => {
+    if (snap.exists()) { room = snap.data(); applyRoom(); }
+  }).catch(() => {});
+});
 
 function leaveRoom() {
   if (unsubRoom) unsubRoom();

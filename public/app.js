@@ -561,11 +561,24 @@ function renderPlayersStrip(sequences, teamCount) {
   }
 }
 
+// findSequences() scans the whole board and is called from several places
+// within a single render pass (and again on the next tap) against the same
+// game.board reference — it only actually needs recomputing once a new
+// snapshot replaces that reference. A single-slot cache keyed on identity
+// covers that without threading the result through every call site.
+let sequencesCache = { board: null, teamCount: null, result: null };
+function computeSequences(board, teamCount) {
+  if (sequencesCache.board !== board || sequencesCache.teamCount !== teamCount) {
+    sequencesCache = { board, teamCount, result: findSequences(board, teamCount) };
+  }
+  return sequencesCache.result;
+}
+
 function renderGame() {
   const game = room.game;
   if (!game) return;
   const teamCount = room.settings.teamCount;
-  const sequences = findSequences(game.board, teamCount);
+  const sequences = computeSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
 
   // While a move is staged (pending the undo window), preview it locally —
@@ -640,7 +653,7 @@ function renderHand() {
   // before the move is even committed — makes the preview feel immediate.
   const hand = pendingMove ? fullHand.filter((id) => id !== pendingMove.instanceId) : fullHand;
   const teamCount = room.settings.teamCount;
-  const sequences = findSequences(game.board, teamCount);
+  const sequences = computeSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
 
   for (const instanceId of hand) {
@@ -694,7 +707,7 @@ function onBoardPick(index) {
   if (!isMyTurn() || pendingMove) return;
   const game = room.game;
   const teamCount = room.settings.teamCount;
-  const sequences = findSequences(game.board, teamCount);
+  const sequences = computeSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
   const hand = game.hands[playerId] || [];
   const map = autoResolveTargets(game.board, hand, locked);
@@ -708,7 +721,7 @@ $('btn-dead-card').addEventListener('click', () => {
   if (!isMyTurn() || pendingMove) return;
   const game = room.game;
   const teamCount = room.settings.teamCount;
-  const sequences = findSequences(game.board, teamCount);
+  const sequences = computeSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
   const hand = game.hands[playerId] || [];
   const deadCard = hand.find((id) => isDeadCard(game.board, id, locked));

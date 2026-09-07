@@ -18,12 +18,12 @@ export function setTeamColors(colors) {
   }
 }
 
-// A team's chip is this white poker-chip image tinted per-team at draw time (see
-// _drawChip) rather than a separate pre-colored asset per team/custom color —
-// team colors are editable per room (the lobby's color wheel), so a fixed set of
-// pre-tinted images could never cover every choice. Shared across BoardView
-// instances (there's only ever one on screen) and drawn as a plain circle until
-// it finishes loading, so the board never waits on it.
+// A team's chip is this white poker-chip image tinted per-team (see getTintedChip)
+// rather than a separate pre-colored asset per team/custom color — team colors are
+// editable per room (the lobby's color wheel), so a fixed set of pre-tinted images
+// could never cover every choice. Shared across BoardView instances (there's only
+// ever one on screen) and drawn as a plain circle until it finishes loading, so the
+// board never waits on it.
 const chipImage = new Image();
 let chipImageReady = false;
 let boardViewNeedingChipRedraw = null;
@@ -31,7 +31,38 @@ chipImage.onload = () => {
   chipImageReady = true;
   if (boardViewNeedingChipRedraw) boardViewNeedingChipRedraw.draw();
 };
+chipImage.onerror = () => { chipImageReady = false; }; // stays on the plain-circle fallback
 chipImage.src = './images/chip-button.png';
+
+// Each team's tinted chip is rendered once onto its own small offscreen canvas and
+// cached by color, then just drawImage()'d onto the board from then on — the
+// multiply/destination-in compositing (see below) only ever runs against that
+// tiny, isolated canvas, never against the board's own canvas context, so nothing
+// about the board's own drawing state (its compositing mode, its content) can be
+// disturbed by it.
+const tintedChipCache = new Map();
+function getTintedChip(color) {
+  if (!chipImageReady) return null;
+  let canvas = tintedChipCache.get(color);
+  if (canvas) return canvas;
+  const size = chipImage.naturalWidth || 300;
+  canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const c = canvas.getContext('2d');
+  // Multiplying a solid color over the white/gray chip darkens each pixel in
+  // proportion to how shaded it already was, so the artwork's own bevel/highlight
+  // stays visible just recolored; destination-in with the original image afterward
+  // clips the (now full-square) multiply fill back to the chip's round silhouette.
+  c.drawImage(chipImage, 0, 0, size, size);
+  c.globalCompositeOperation = 'multiply';
+  c.fillStyle = color;
+  c.fillRect(0, 0, size, size);
+  c.globalCompositeOperation = 'destination-in';
+  c.drawImage(chipImage, 0, 0, size, size);
+  tintedChipCache.set(color, canvas);
+  return canvas;
+}
 
 export class BoardView {
   constructor(canvas, { onPick } = {}) {
@@ -343,18 +374,15 @@ export class BoardView {
     this._drawChip(cx, cy, r, team, locked);
   }
 
-  // Draws the chip-button image tinted to the team's color, or a plain filled
-  // circle as a fallback until the image has loaded. The tint is a standard
-  // "multiply then clip back to the source's own alpha" recipe: multiplying a
-  // solid color over the white/gray chip darkens each pixel in proportion to how
-  // shaded it already was (so the bevel and highlight the artwork drew are still
-  // visible, just recolored) while a plain source-over fill would just paint a flat
-  // disc over it; 'destination-in' with the original image afterward re-clips the
-  // now-rectangular multiply fill back to the chip's actual round silhouette.
+  // Draws the chip-button image tinted to the team's color (pre-rendered once per
+  // color — see getTintedChip), or a plain filled circle as a fallback until the
+  // image has loaded or if tinting ever fails for any reason.
   _drawChip(cx, cy, r, team, locked) {
     const ctx = this.ctx;
     const color = TEAM_COLOR[team];
-    if (!chipImageReady) {
+    let tinted = null;
+    try { tinted = getTintedChip(color); } catch { /* fall back below */ }
+    if (!tinted) {
       ctx.beginPath();
       ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fillStyle = color;
@@ -363,16 +391,7 @@ export class BoardView {
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.stroke();
     } else {
-      const d = r * 2;
-      const x = cx - r, y = cy - r;
-      ctx.save();
-      ctx.drawImage(chipImage, x, y, d, d);
-      ctx.globalCompositeOperation = 'multiply';
-      ctx.fillStyle = color;
-      ctx.fillRect(x, y, d, d);
-      ctx.globalCompositeOperation = 'destination-in';
-      ctx.drawImage(chipImage, x, y, d, d);
-      ctx.restore();
+      ctx.drawImage(tinted, cx - r, cy - r, r * 2, r * 2);
     }
     if (locked) {
       ctx.beginPath();

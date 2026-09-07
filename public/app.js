@@ -1336,21 +1336,24 @@ function renderGame() {
 
   // A big, unmissable "it's X's turn" announcement for everyone at the table,
   // whenever the active player actually changes (not on every render, and not on
-  // the first load of a game already in progress).
+  // the first load of a game already in progress). The "your turn" sound cue plays
+  // at the exact same moment this pill actually appears — it used to fire
+  // immediately regardless of this delay, so it could go off well before the pill
+  // it's supposed to accompany.
+  const justBecameMyTurn = isMyTurn() && wasMyTurn !== undefined && !wasMyTurn;
   if (curPlayer && curPid !== lastAnnouncedPid) {
     const isFirstLoad = lastAnnouncedPid === undefined;
     lastAnnouncedPid = curPid;
     if (!isFirstLoad && !room.paused) {
       const text = isMyTurn() ? 'Your turn!' : `${curPlayer.name}'s turn!`;
       clearTimeout(showTurnAnnounce._delayT);
-      showTurnAnnounce._delayT = setTimeout(() => showTurnAnnounce(text), cardFlyStillRunningMs);
+      showTurnAnnounce._delayT = setTimeout(() => {
+        showTurnAnnounce(text);
+        if (justBecameMyTurn) playTurnSound();
+      }, cardFlyStillRunningMs);
     }
   }
-
-  if (isMyTurn() !== wasMyTurn) {
-    if (isMyTurn() && wasMyTurn !== undefined) playTurnSound();
-    wasMyTurn = isMyTurn();
-  }
+  wasMyTurn = isMyTurn();
 
   const completedLinesCount = (game.completedLines || []).length;
   if (completedLinesCount !== lastCompletedLinesCount) {

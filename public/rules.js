@@ -16,7 +16,12 @@ import {
 // board: array of 100 entries, each `team` (0/1/2) or null. Corners are always
 // treated as wild and are never occupied by a chip.
 
-export function legalTargetsFor(board, instanceId) {
+// `myTeam` matters only for a one-eyed jack: real Sequence rules never let a removal
+// touch your own team's chip, only an opponent's, so it's excluded from the target
+// list at the source rather than merely blocked at validation time — every caller
+// (highlighting, auto-resolve, the bot, move validation) gets the same honest set of
+// targets instead of each having to re-apply this exclusion itself.
+export function legalTargetsFor(board, instanceId, myTeam) {
   const code = instanceCode(instanceId);
   if (isTwoEyedJack(code)) {
     const targets = [];
@@ -28,7 +33,7 @@ export function legalTargetsFor(board, instanceId) {
   if (isOneEyedJack(code)) {
     const targets = [];
     for (let i = 0; i < board.length; i++) {
-      if (!isCorner(i) && board[i] != null) targets.push(i);
+      if (!isCorner(i) && board[i] != null && board[i] !== myTeam) targets.push(i);
     }
     return { action: 'remove', targets };
   }
@@ -37,8 +42,8 @@ export function legalTargetsFor(board, instanceId) {
   return { action: 'place', targets };
 }
 
-export function isDeadCard(board, instanceId, lockedIndices) {
-  const { action, targets } = legalTargetsFor(board, instanceId);
+export function isDeadCard(board, instanceId, lockedIndices, myTeam) {
+  const { action, targets } = legalTargetsFor(board, instanceId, myTeam);
   if (action === 'remove') {
     const locked = lockedIndices || new Set();
     return targets.filter((i) => !locked.has(i)).length === 0;
@@ -46,23 +51,20 @@ export function isDeadCard(board, instanceId, lockedIndices) {
   return targets.length === 0;
 }
 
-// The set of board cells worth highlighting just from glancing at a hand —
-// every normal card's exact spot, plus removable targets for any one-eyed
-// jack. Two-eyed (wild) jacks are deliberately excluded: a wild can go on
-// literally any empty cell, so highlighting all of them would just flood
-// the board instead of being useful — a wild is still usable by tapping an
-// otherwise-unhighlighted empty cell (see autoResolveTargets below).
+// The set of board cells worth highlighting just from glancing at a hand — every
+// normal card's exact (empty) spot. Jacks are deliberately excluded entirely: a
+// two-eyed (wild) can go on literally any empty cell, and a one-eyed (removal)
+// always targets a cell that already has a chip on it — highlighting either would
+// mean lighting up already-occupied spaces or flooding the whole board, instead of
+// just showing where the player's hand can actually be laid down. Both jacks are
+// still usable by tapping their target directly (see autoResolveTargets below).
 export function ambientHighlightSet(board, hand, lockedIndices) {
-  const locked = lockedIndices || new Set();
   const set = new Set();
   for (const instanceId of hand) {
     const code = instanceCode(instanceId);
-    if (isTwoEyedJack(code)) continue;
-    const { action, targets } = legalTargetsFor(board, instanceId);
-    for (const t of targets) {
-      if (action === 'remove' && locked.has(t)) continue;
-      set.add(t);
-    }
+    if (isTwoEyedJack(code) || isOneEyedJack(code)) continue;
+    const { targets } = legalTargetsFor(board, instanceId);
+    for (const t of targets) set.add(t);
   }
   return set;
 }
@@ -73,7 +75,7 @@ export function ambientHighlightSet(board, hand, lockedIndices) {
 // card first (cheapest to spend), then a one-eyed jack removal, then a
 // two-eyed wild last (most valuable, held in reserve) — this is also what
 // makes a wild usable even though it's excluded from ambientHighlightSet.
-export function autoResolveTargets(board, hand, lockedIndices) {
+export function autoResolveTargets(board, hand, lockedIndices, myTeam) {
   const locked = lockedIndices || new Set();
   const normals = [];
   const oneEyed = [];
@@ -86,25 +88,25 @@ export function autoResolveTargets(board, hand, lockedIndices) {
   }
   const map = new Map();
   for (const instanceId of normals) {
-    const { targets } = legalTargetsFor(board, instanceId);
+    const { targets } = legalTargetsFor(board, instanceId, myTeam);
     for (const t of targets) if (!map.has(t)) map.set(t, { instanceId, action: 'place' });
   }
   for (const instanceId of oneEyed) {
-    const { targets } = legalTargetsFor(board, instanceId);
+    const { targets } = legalTargetsFor(board, instanceId, myTeam);
     for (const t of targets) {
       if (locked.has(t) || map.has(t)) continue;
       map.set(t, { instanceId, action: 'remove' });
     }
   }
   for (const instanceId of twoEyed) {
-    const { targets } = legalTargetsFor(board, instanceId);
+    const { targets } = legalTargetsFor(board, instanceId, myTeam);
     for (const t of targets) if (!map.has(t)) map.set(t, { instanceId, action: 'place' });
   }
   return map;
 }
 
-export function validateMove(board, instanceId, targetIndex, lockedIndices) {
-  const { action, targets } = legalTargetsFor(board, instanceId);
+export function validateMove(board, instanceId, targetIndex, lockedIndices, myTeam) {
+  const { action, targets } = legalTargetsFor(board, instanceId, myTeam);
   if (!targets.includes(targetIndex)) {
     return { ok: false, reason: 'not-a-legal-target' };
   }

@@ -1213,7 +1213,7 @@ function renderHand() {
     const card = document.createElement('div');
     card.className = 'hand-card';
     if (SUIT_COLOR[cardSuit(code)] === 'red') card.classList.add('red');
-    if (isMyTurn() && isDeadCard(game.board, instanceId, locked)) card.classList.add('dead');
+    if (isMyTurn() && isDeadCard(game.board, instanceId, locked, myTeam())) card.classList.add('dead');
     let badge = '';
     if (isTwoEyedJack(code)) {
       card.classList.add('jack-wild');
@@ -1259,7 +1259,7 @@ function renderHand() {
       deadBtn.hidden = true;
       passBtn.hidden = false;
     } else {
-      const map = autoResolveTargets(game.board, fullHand, locked);
+      const map = autoResolveTargets(game.board, fullHand, locked, myTeam());
       hint.textContent = map.size > 0
         ? 'Tap a highlighted space to play a card'
         : 'No plays available — swap a dead card';
@@ -1281,7 +1281,7 @@ function onBoardPick(index) {
     const sequences = computeSequences(game.board, teamCount);
     const locked = lockedIndicesFrom(sequences);
     const hand = game.hands[playerId] || [];
-    const map = autoResolveTargets(game.board, hand, locked);
+    const map = autoResolveTargets(game.board, hand, locked, myTeam());
     const entry = map.get(index);
     if (entry) {
       if (UNDO_ENABLED) startPendingMove(entry, index);
@@ -1304,7 +1304,7 @@ $('btn-dead-card').addEventListener('click', () => {
   const sequences = computeSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
   const hand = game.hands[playerId] || [];
-  const deadCard = hand.find((id) => isDeadCard(game.board, id, locked));
+  const deadCard = hand.find((id) => isDeadCard(game.board, id, locked, myTeam()));
   if (deadCard) applyDeadCardSwap(deadCard);
 });
 
@@ -1367,11 +1367,11 @@ function computeMoveResult(data, myPid, instanceId, targetIndex) {
   if (!hand.includes(instanceId)) return { ok: false, reason: 'card-not-in-hand' };
   const sequencesBefore = findSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequencesBefore);
-  const check = validateMove(game.board, instanceId, targetIndex, locked);
+  const team = data.players[myPid].team;
+  const check = validateMove(game.board, instanceId, targetIndex, locked, team);
   if (!check.ok) return { ok: false, reason: check.reason };
 
   const board = game.board.slice();
-  const team = data.players[myPid].team;
   if (check.action === 'place') board[targetIndex] = team;
   else board[targetIndex] = null;
 
@@ -1492,7 +1492,7 @@ function computeSwapResult(data, myPid, instanceId) {
   if (!hand.includes(instanceId)) return { ok: false };
   const sequences = findSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
-  if (!isDeadCard(game.board, instanceId, locked)) return { ok: false };
+  if (!isDeadCard(game.board, instanceId, locked, data.players[myPid].team)) return { ok: false };
 
   const newHand = hand.filter((c) => c !== instanceId);
   const deck = game.deck.slice();

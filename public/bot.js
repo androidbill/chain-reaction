@@ -95,7 +95,7 @@ export function chooseBotMove(board, hand, teamCount, myTeam, locked, difficulty
 
   for (const instanceId of hand) {
     const code = instanceCode(instanceId);
-    const { action, targets } = legalTargetsFor(board, instanceId);
+    const { action, targets } = legalTargetsFor(board, instanceId, myTeam);
     const wild = isTwoEyedJack(code);
     const removal = isOneEyedJack(code);
 
@@ -128,7 +128,7 @@ export function chooseBotMove(board, hand, teamCount, myTeam, locked, difficulty
   if (best) return best;
 
   // Nothing legal anywhere in hand — same fallback a human has: swap a dead card.
-  const dead = hand.find((id) => isDeadCard(board, id, locked));
+  const dead = hand.find((id) => isDeadCard(board, id, locked, myTeam));
   if (dead) return { swap: dead };
   return null; // shouldn't happen with a full 100-cell board and 6-7 card hands
 }

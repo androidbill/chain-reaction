@@ -48,6 +48,18 @@ function emptyBoard() {
   assert.equal(validateMove(board, 'JS#0', 15).ok, true);
 }
 
+// 3b. One-eyed jack can never target your own team's chip, only an opponent's.
+{
+  const board = emptyBoard();
+  board[15] = 0; // own chip
+  board[16] = 1; // opponent chip
+  const { targets } = legalTargetsFor(board, 'JS#0', 0);
+  assert.equal(targets.includes(15), false);
+  assert.ok(targets.includes(16));
+  assert.equal(validateMove(board, 'JS#0', 15, new Set(), 0).ok, false);
+  assert.equal(validateMove(board, 'JS#0', 16, new Set(), 0).ok, true);
+}
+
 // 4. Dead card: both of a normal card's spots occupied => dead.
 {
   const board = emptyBoard();
@@ -118,12 +130,14 @@ function emptyBoard() {
   assert.ok(!spots7H.includes(wildOnlyCell) && !spots3D.includes(wildOnlyCell));
   assert.equal(set.has(wildOnlyCell), false);
 
-  // One-eyed jack: removable opponent chips are included, locked ones are not.
+  // One-eyed jack: excluded entirely, same as a wild — it only ever targets a cell
+  // that already has a chip on it, so highlighting it would mean lighting up
+  // already-occupied spaces instead of showing where the hand can be laid down.
   const board2 = emptyBoard();
   board2[15] = 1;
   board2[16] = 1;
   const set2 = ambientHighlightSet(board2, ['JS#0'], new Set([16]));
-  assert.ok(set2.has(15));
+  assert.equal(set2.has(15), false);
   assert.equal(set2.has(16), false);
 }
 

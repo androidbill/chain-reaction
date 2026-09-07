@@ -1928,6 +1928,54 @@ function spawnConfetti(teamColor, count = 60) {
   field.appendChild(frag);
 }
 
+// ---------------- Win overlay drag (peek at the board underneath) ----------------
+// Dragging the little handle down slides the whole stats screen down, revealing the
+// board (with its winning sequences still glowing) at the top of the viewport; drag
+// or tap it again to bring the stats screen back up. Only the handle is a drag
+// target, not the whole overlay, so the stats list's own internal scrolling and the
+// action buttons underneath aren't affected.
+let winOverlayPeeked = false;
+let winOverlayDrag = null; // { startY, maxDrag, moved }
+function resetWinOverlayDrag() {
+  winOverlayPeeked = false;
+  winOverlayDrag = null;
+  const overlay = $('win-overlay');
+  overlay.style.transition = 'none';
+  overlay.style.transform = '';
+}
+function setWinOverlayOffset(px, animate) {
+  const overlay = $('win-overlay');
+  overlay.style.transition = animate ? 'transform 0.25s ease' : 'none';
+  overlay.style.transform = px > 0 ? `translateY(${px}px)` : '';
+}
+(() => {
+  const handle = $('win-overlay-handle');
+  handle.addEventListener('pointerdown', (e) => {
+    const maxDrag = Math.round(window.innerHeight * 0.62);
+    winOverlayDrag = { startY: e.clientY, maxDrag, moved: false };
+    handle.setPointerCapture(e.pointerId);
+    setWinOverlayOffset(winOverlayPeeked ? maxDrag : 0, false);
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (!winOverlayDrag) return;
+    const base = winOverlayPeeked ? winOverlayDrag.maxDrag : 0;
+    const dy = Math.max(0, Math.min(winOverlayDrag.maxDrag, e.clientY - winOverlayDrag.startY + base));
+    if (Math.abs(e.clientY - winOverlayDrag.startY) > 4) winOverlayDrag.moved = true;
+    setWinOverlayOffset(dy, false);
+  });
+  const endDrag = (e) => {
+    if (!winOverlayDrag) return;
+    const { maxDrag, moved } = winOverlayDrag;
+    const base = winOverlayPeeked ? maxDrag : 0;
+    const dy = Math.max(0, Math.min(maxDrag, e.clientY - winOverlayDrag.startY + base));
+    winOverlayDrag = null;
+    winOverlayPeeked = moved ? dy > maxDrag * 0.35 : !winOverlayPeeked;
+    setWinOverlayOffset(winOverlayPeeked ? maxDrag : 0, true);
+  };
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+})();
+
 let lastVotesSignature = null;
 let playAgainRetryId = null;
 function stopPlayAgainRetry() {
@@ -1941,6 +1989,7 @@ function showWinOverlay(winnerTeam) {
   // from — belt and suspenders, since a stray running interval this late would sit
   // right on top of a "wins!" overlay the whole table is looking at.
   stopTurnTimer();
+  resetWinOverlayDrag();
   $('win-title').textContent = winnerTeam == null
     ? "🤝 It's a draw — the deck ran out"
     : `🎉 Team ${TEAM_NAMES[winnerTeam]} wins!`;

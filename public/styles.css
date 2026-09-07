@@ -217,7 +217,15 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
 
 .win-overlay { position: fixed; inset: 0; background: rgba(10,14,23,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 100; text-align: center; padding: 24px; }
 .win-overlay h2 { font-size: 30px; margin: 0; }
-.stats-overlay { justify-content: flex-start; padding-top: calc(48px + var(--safe-t)); }
+.stats-overlay { justify-content: flex-start; padding-top: calc(28px + var(--safe-t)); }
+/* Drag this down to peek at the board underneath (the winning sequences are still
+   glowing on it), drag or tap it again to bring the stats screen back up — see the
+   pointer handling wired to #win-overlay-handle in app.js. */
+.win-overlay-handle {
+  width: 100%; padding: 4px 0 16px; display: flex; justify-content: center;
+  cursor: grab; touch-action: none; flex-shrink: 0;
+}
+.win-overlay-handle::before { content: ''; width: 40px; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.35); }
 
 /* ---------- Win celebration: winning sequences glow on the board (see
    BoardView.celebrateSequences) while this shows the winners' names over a burst of

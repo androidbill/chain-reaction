@@ -63,7 +63,14 @@
 <!-- ===================== LOBBY ===================== -->
 <div class="screen" id="screen-lobby" hidden>
   <div class="lobby-code" id="lobby-code">----</div>
-  <div class="lobby-players" id="lobby-players"></div>
+  <div class="lobby-teams" id="lobby-teams"></div>
+  <div class="lobby-timer-block">
+    <h3>Turn Timer</h3>
+    <div class="seg" id="lobby-timer-seg">
+      <button data-secs="30" class="active">30s</button>
+      <button data-secs="45">45s</button>
+    </div>
+  </div>
   <div class="lobby-actions">
     <button class="btn secondary" id="btn-leave-lobby">Leave</button>
     <button class="btn" id="btn-start-game">Start Game</button>
@@ -163,6 +170,18 @@
 </div>
 
 <!-- ===================== SHEETS ===================== -->
+<div class="sheet-backdrop" id="sheet-team-color" hidden>
+  <div class="sheet">
+    <h3 class="sheet-title" id="color-wheel-title">Team Color</h3>
+    <div class="color-wheel-wrap">
+      <canvas id="color-wheel-canvas" width="220" height="220"></canvas>
+    </div>
+    <div class="sheet-actions">
+      <button class="btn" id="btn-color-done" data-close>Done</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet-backdrop" id="sheet-about" hidden>
   <div class="sheet">
     <div class="about-hero">

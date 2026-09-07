@@ -6,6 +6,18 @@ import { cardSuit, cardRank, SUIT_SYMBOL, SUIT_COLOR } from './cards.js';
 
 const TEAM_COLOR = ['#e0473c', '#3b7fe0', '#3fb56b']; // red, blue, green
 
+// Team colors are per-room and player-editable (a lobby color wheel), but every
+// place that draws a team color — the board chips here, plus the player strip,
+// turn banner, and win screen in app.js — reads this same array by reference. So
+// customizing a room's colors is just mutating it in place, not threading a colors
+// param through every draw call.
+export function setTeamColors(colors) {
+  if (!Array.isArray(colors)) return;
+  for (let i = 0; i < colors.length; i++) {
+    if (colors[i]) TEAM_COLOR[i] = colors[i];
+  }
+}
+
 export class BoardView {
   constructor(canvas, { onPick } = {}) {
     this.canvas = canvas;

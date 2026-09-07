@@ -14,7 +14,7 @@ import {
   isDeadCard, validateMove, findSequences, lockedIndicesFrom, checkWinner, nextTurnIndex,
   ambientHighlightSet, autoResolveTargets, countSequencesByTeam,
 } from './rules.js';
-import { BoardView, TEAM_COLOR } from './render.js';
+import { BoardView, TEAM_COLOR, setTeamColors } from './render.js';
 import { sfx } from './audio.js';
 import { chooseBotMove, makeBotName } from './bot.js';
 
@@ -31,7 +31,11 @@ const db = initializeFirestore(fbApp, {
 
 const $ = (id) => document.getElementById(id);
 const TEAM_NAMES = ['Red', 'Blue', 'Green'];
-const TURN_SECONDS = 30;
+const DEFAULT_TEAM_COLORS = ['#e0473c', '#3b7fe0', '#3fb56b'];
+const DEFAULT_TURN_SECONDS = 30;
+function currentTurnSeconds() {
+  return (room && room.settings && room.settings.turnSeconds) || DEFAULT_TURN_SECONDS;
+}
 // The deck is a fixed 104 cards and every player gets a full 6- or 7-card hand
 // regardless of team size (unlike real Sequence, hand size here doesn't shrink as
 // the table grows) — past 12 players, dealing can run the deck dry mid-deal and
@@ -397,7 +401,11 @@ async function createRoom() {
       expiresAt: Date.now() + 24 * 3600 * 1000,
       hostId: playerId,
       state: 'lobby',
-      settings: { teamCount: chosenTeamCount },
+      settings: {
+        teamCount: chosenTeamCount,
+        teamColors: DEFAULT_TEAM_COLORS.slice(0, chosenTeamCount),
+        turnSeconds: DEFAULT_TURN_SECONDS,
+      },
       players: { [playerId]: { name: playerName, team: 0, joinedAt: Date.now() } },
       order: [],
       game: null,
@@ -420,8 +428,9 @@ async function joinRoom(code) {
     if (data.state !== 'lobby' && !data.players[playerId]) { toast('That game already started'); return; }
     if (!data.players[playerId]) {
       if (Object.keys(data.players).length >= MAX_PLAYERS) { toast(`Room is full (max ${MAX_PLAYERS} players)`); return; }
+      const team = pickTeamForNewPlayer(data.players, data.settings.teamCount);
       await updateDoc(ref, {
-        [`players.${playerId}`]: { name: playerName, team: 0, joinedAt: Date.now() },
+        [`players.${playerId}`]: { name: playerName, team, joinedAt: Date.now() },
       });
     }
     enterRoom(code);
@@ -601,6 +610,7 @@ $('btn-leave-lobby').addEventListener('click', leaveRoom);
 // ---------------- Room state -> screens ----------------
 function applyRoom() {
   if (!room) return;
+  setTeamColors((room.settings && room.settings.teamColors) || DEFAULT_TEAM_COLORS);
   updateGameKebabVisibility();
   if (room.state === 'lobby') { renderLobby(); showScreen('screen-lobby'); }
   else if (room.state === 'playing' || room.state === 'finished') {
@@ -657,36 +667,230 @@ function updateGameKebabVisibility() {
     : '<span>&#9208;&#65039;</span>Pause Game';
 }
 
-function renderLobby() {
-  $('lobby-code').textContent = roomCode;
-  const wrap = $('lobby-players');
-  wrap.innerHTML = '';
-  const teamCount = room.settings.teamCount;
-  for (const [pid, p] of Object.entries(room.players)) {
-    const row = document.createElement('div');
-    row.className = 'player-row';
-    const dot = document.createElement('div');
-    dot.className = 'team-dot';
-    dot.style.background = TEAM_COLOR[p.team] || '#888';
-    if (pid === playerId) {
-      dot.title = 'Tap to change team';
-      dot.style.cursor = 'pointer';
-      dot.addEventListener('click', () => cycleMyTeam(teamCount));
-    }
-    const name = document.createElement('div');
-    name.className = 'name';
-    name.textContent = p.name + (pid === room.hostId ? ' (host)' : '') + (pid === playerId ? ' — you' : '');
-    row.appendChild(dot);
-    row.appendChild(name);
-    wrap.appendChild(row);
+// New players default onto whichever team currently has the fewest members, so a
+// table fills in roughly evenly (Red, Blue, Red, Blue...) instead of everyone
+// landing on team 0 until someone manually switches.
+function pickTeamForNewPlayer(players, teamCount) {
+  const counts = new Array(teamCount).fill(0);
+  for (const p of Object.values(players)) {
+    if (p.team < teamCount) counts[p.team]++;
   }
-  $('btn-start-game').style.display = room.hostId === playerId ? '' : 'none';
+  let best = 0;
+  for (let t = 1; t < teamCount; t++) if (counts[t] < counts[best]) best = t;
+  return best;
 }
 
-async function cycleMyTeam(teamCount) {
-  const cur = room.players[playerId].team || 0;
-  const next = (cur + 1) % teamCount;
-  await updateDoc(roomRef, { [`players.${playerId}.team`]: next }).catch(() => {});
+function renderLobby() {
+  $('lobby-code').textContent = roomCode;
+  const teamCount = room.settings.teamCount;
+  const myTeam = room.players[playerId] ? room.players[playerId].team : null;
+
+  const wrap = $('lobby-teams');
+  wrap.innerHTML = '';
+  for (let t = 0; t < teamCount; t++) {
+    const col = document.createElement('div');
+    col.className = 'lobby-team';
+
+    const header = document.createElement('div');
+    header.className = 'lobby-team-header';
+    const swatch = document.createElement('button');
+    swatch.className = 'lobby-team-swatch';
+    swatch.style.background = TEAM_COLOR[t];
+    swatch.title = myTeam === t ? 'Tap to change this team\'s color' : `Join ${TEAM_NAMES[t]} to change its color`;
+    swatch.addEventListener('click', () => {
+      if (myTeam !== t) { toast(`Join ${TEAM_NAMES[t]} to change its color`); return; }
+      openColorWheel(t);
+    });
+    const name = document.createElement('div');
+    name.className = 'lobby-team-name';
+    name.textContent = TEAM_NAMES[t];
+    header.appendChild(swatch);
+    header.appendChild(name);
+    col.appendChild(header);
+
+    const list = document.createElement('div');
+    list.className = 'lobby-team-players';
+    for (const [pid, p] of Object.entries(room.players)) {
+      if (p.team !== t) continue;
+      const row = document.createElement('div');
+      row.className = 'lobby-player-chip';
+      row.textContent = p.name + (pid === room.hostId ? ' (host)' : '') + (pid === playerId ? ' — you' : '');
+      list.appendChild(row);
+    }
+    col.appendChild(list);
+
+    if (myTeam !== t) {
+      const joinBtn = document.createElement('button');
+      joinBtn.className = 'btn secondary lobby-team-join';
+      joinBtn.textContent = `Join ${TEAM_NAMES[t]}`;
+      joinBtn.addEventListener('click', () => setMyTeam(t));
+      col.appendChild(joinBtn);
+    }
+
+    wrap.appendChild(col);
+  }
+
+  const turnSeconds = room.settings.turnSeconds || DEFAULT_TURN_SECONDS;
+  const isHost = room.hostId === playerId;
+  for (const btn of $('lobby-timer-seg').querySelectorAll('button')) {
+    btn.classList.toggle('active', Number(btn.dataset.secs) === turnSeconds);
+    btn.disabled = !isHost;
+  }
+
+  $('btn-start-game').style.display = isHost ? '' : 'none';
+}
+
+async function setMyTeam(team) {
+  if (!roomRef) return;
+  await updateDoc(roomRef, { [`players.${playerId}.team`]: team }).catch(() => {});
+}
+
+$('lobby-timer-seg').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-secs]');
+  if (!btn || !room || room.hostId !== playerId) return;
+  const secs = Number(btn.dataset.secs);
+  updateDoc(roomRef, { 'settings.turnSeconds': secs }).catch(() => {});
+});
+
+// ---------------- Team color wheel ----------------
+const WHEEL_SIZE = 220;
+let colorWheelTeam = null;
+let wheelDragging = false;
+let wheelImageData = null;
+
+function hueSatToHex(hue, sat) {
+  const s = sat, l = 0.5;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+  if (hue < 60) { r = c; g = x; b = 0; }
+  else if (hue < 120) { r = x; g = c; b = 0; }
+  else if (hue < 180) { r = 0; g = c; b = x; }
+  else if (hue < 240) { r = 0; g = x; b = c; }
+  else if (hue < 300) { r = x; g = 0; b = c; }
+  else { r = c; g = 0; b = x; }
+  const to255 = (v) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return `#${to255(r)}${to255(g)}${to255(b)}`;
+}
+
+function hexToHueSat(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2;
+  const d = max - min;
+  let h = 0, s = 0;
+  if (d !== 0) {
+    s = d / (1 - Math.abs(2 * l - 1));
+    if (max === r) h = 60 * (((g - b) / d) % 6);
+    else if (max === g) h = 60 * ((b - r) / d + 2);
+    else h = 60 * ((r - g) / d + 4);
+  }
+  if (h < 0) h += 360;
+  return { hue: h, sat: Math.min(1, s) };
+}
+
+function buildWheelImage() {
+  const size = WHEEL_SIZE;
+  const cvs = document.createElement('canvas');
+  cvs.width = size; cvs.height = size;
+  const cx = cvs.getContext('2d');
+  const img = cx.createImageData(size, size);
+  const radius = size / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = x - radius, dy = y - radius;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const idx = (y * size + x) * 4;
+      if (dist > radius) { img.data[idx + 3] = 0; continue; }
+      let hue = Math.atan2(dy, dx) * 180 / Math.PI;
+      if (hue < 0) hue += 360;
+      const hex = hueSatToHex(hue, Math.min(1, dist / radius));
+      img.data[idx] = parseInt(hex.slice(1, 3), 16);
+      img.data[idx + 1] = parseInt(hex.slice(3, 5), 16);
+      img.data[idx + 2] = parseInt(hex.slice(5, 7), 16);
+      img.data[idx + 3] = 255;
+    }
+  }
+  return img;
+}
+
+function drawColorWheel(hex) {
+  const canvas = $('color-wheel-canvas');
+  const ctx = canvas.getContext('2d');
+  if (!wheelImageData) wheelImageData = buildWheelImage();
+  ctx.putImageData(wheelImageData, 0, 0);
+  const { hue, sat } = hexToHueSat(hex);
+  const radius = WHEEL_SIZE / 2;
+  const rad = hue * Math.PI / 180;
+  const dist = sat * radius;
+  const px = radius + Math.cos(rad) * dist;
+  const py = radius + Math.sin(rad) * dist;
+  ctx.beginPath();
+  ctx.arc(px, py, 9, 0, Math.PI * 2);
+  ctx.fillStyle = hex;
+  ctx.fill();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#fff';
+  ctx.stroke();
+}
+
+function colorAtCanvasPoint(canvas, clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const x = (clientX - rect.left) * scaleX;
+  const y = (clientY - rect.top) * scaleY;
+  const radius = WHEEL_SIZE / 2;
+  const dx = x - radius, dy = y - radius;
+  const dist = Math.min(Math.sqrt(dx * dx + dy * dy), radius);
+  let hue = Math.atan2(dy, dx) * 180 / Math.PI;
+  if (hue < 0) hue += 360;
+  return hueSatToHex(hue, dist / radius);
+}
+
+function openColorWheel(team) {
+  colorWheelTeam = team;
+  $('color-wheel-title').textContent = `${TEAM_NAMES[team]} Color`;
+  drawColorWheel(TEAM_COLOR[team]);
+  showSheet('sheet-team-color');
+}
+
+function commitTeamColor(team, hex) {
+  const base = (room.settings.teamColors && room.settings.teamColors.length === room.settings.teamCount)
+    ? room.settings.teamColors
+    : DEFAULT_TEAM_COLORS.slice(0, room.settings.teamCount);
+  const colors = base.slice();
+  colors[team] = hex;
+  if (solo) {
+    room.settings.teamColors = colors;
+    setTeamColors(colors);
+    applyRoom();
+  } else if (roomRef) {
+    updateDoc(roomRef, { 'settings.teamColors': colors }).catch(() => toast('Could not update color'));
+  }
+}
+
+{
+  const canvas = $('color-wheel-canvas');
+  canvas.addEventListener('pointerdown', (e) => {
+    if (colorWheelTeam == null) return;
+    wheelDragging = true;
+    canvas.setPointerCapture(e.pointerId);
+    drawColorWheel(colorAtCanvasPoint(canvas, e.clientX, e.clientY));
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!wheelDragging || colorWheelTeam == null) return;
+    drawColorWheel(colorAtCanvasPoint(canvas, e.clientX, e.clientY));
+  });
+  const endDrag = (e) => {
+    if (!wheelDragging || colorWheelTeam == null) return;
+    wheelDragging = false;
+    commitTeamColor(colorWheelTeam, colorAtCanvasPoint(canvas, e.clientX, e.clientY));
+  };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', () => { wheelDragging = false; });
 }
 
 // Turn order alternates across teams (Red, Blue, Red, Blue — not Red, Red, Blue,
@@ -1532,7 +1736,7 @@ function tickTurnTimer() {
   // desync the countdown mid-turn — only the very first reading depends on it,
   // and serverNow() is what keeps that reading honest.
   const elapsed = (wallAtReceipt - startedAtMillis) + (performance.now() - perfAtReceipt);
-  const remainingMs = TURN_SECONDS * 1000 - elapsed;
+  const remainingMs = currentTurnSeconds() * 1000 - elapsed;
   const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
   const el = $('turn-timer');
   el.textContent = `⏱ ${seconds}s`;

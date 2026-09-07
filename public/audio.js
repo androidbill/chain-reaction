@@ -59,6 +59,8 @@ function playSample(url, vol = 1) {
 const SOUNDS = {
   turn: './sounds/turn-sound.mp3',
   cardLay: './sounds/card-lay-sound.mp3',
+  wildCard: './sounds/wild-card-sound.mp3',
+  removeCard: './sounds/remove-card-sound.mp3',
   sequence: './sounds/sequence-sound.mp3',
   win: './sounds/win-sound.mp3',
 };
@@ -74,6 +76,8 @@ document.addEventListener('pointerdown', () => {
 export const sfx = {
   yourTurn: () => playSample(SOUNDS.turn, 0.85),
   cardLay: () => playSample(SOUNDS.cardLay, 0.8),
+  wildCard: () => playSample(SOUNDS.wildCard, 0.85),
+  removeCard: () => playSample(SOUNDS.removeCard, 0.85),
   sequence: () => playSample(SOUNDS.sequence, 0.9),
   win: () => playSample(SOUNDS.win, 1),
 };

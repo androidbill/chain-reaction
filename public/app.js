@@ -106,7 +106,11 @@ function makeCode() {
 
 // ---------------- Notification sounds (public/sounds/*.mp3, see audio.js) ----------------
 function playTurnSound() { sfx.yourTurn(); }
-function playMoveSound() { sfx.cardLay(); }
+function playMoveSound(lastMove) {
+  if (lastMove.action === 'remove') sfx.removeCard();
+  else if (isTwoEyedJack(lastMove.code)) sfx.wildCard();
+  else sfx.cardLay();
+}
 function playSequenceSound() { sfx.sequence(); }
 function playWinSound() { sfx.win(); }
 
@@ -123,7 +127,8 @@ function announceUpdate() { $('update-banner').hidden = false; }
 const CORE_FILES = [
   'index.html', 'app.js', 'board.js', 'render.js', 'cards.js', 'rules.js', 'audio.js', 'bot.js',
   'firebase-config.js', 'version.js', 'styles.css', 'manifest.webmanifest',
-  'sounds/turn-sound.mp3', 'sounds/card-lay-sound.mp3', 'sounds/sequence-sound.mp3', 'sounds/win-sound.mp3',
+  'sounds/turn-sound.mp3', 'sounds/card-lay-sound.mp3', 'sounds/wild-card-sound.mp3',
+  'sounds/remove-card-sound.mp3', 'sounds/sequence-sound.mp3', 'sounds/win-sound.mp3',
 ];
 async function fullRefresh() {
   try {
@@ -1159,7 +1164,7 @@ function renderGame() {
     if (!isFirstLoad) {
       showShoutout(game.lastMove);
       if (game.lastMove.type === 'card') {
-        playMoveSound();
+        playMoveSound(game.lastMove);
         boardView.flashCell(game.lastMove.targetIndex);
         showCardFly(game.lastMove);
       }

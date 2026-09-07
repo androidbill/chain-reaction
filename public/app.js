@@ -827,7 +827,7 @@ function scheduleBotTurnIfNeeded() {
   if (!solo || !room || room.state !== 'playing' || room.paused) return;
   const curPlayer = room.players[room.game.currentPlayerId];
   if (!curPlayer || !curPlayer.isBot) return;
-  botTimeoutId = setTimeout(runBotTurn, 700 + Math.random() * 900);
+  botTimeoutId = setTimeout(runBotTurn, 2000);
 }
 
 function runBotTurn() {

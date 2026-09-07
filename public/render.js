@@ -315,10 +315,29 @@ export class BoardView {
   draw() {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.w, this.h);
+    this._pendingDragChip = null;
     for (let i = 0; i < BOARD_SIZE * BOARD_SIZE; i++) {
       this._drawCell(i);
     }
+    if (this._pendingDragChip) this._drawDraggedChip(this._pendingDragChip);
     for (const seq of this.celebrating) this._drawSequencePill(seq.cells, seq.color);
+  }
+
+  _drawDraggedChip({ cx, cy, r, team, locked }) {
+    const ctx = this.ctx;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = TEAM_COLOR[team];
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, r * 0.09);
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.stroke();
+    if (locked) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fill();
+    }
   }
 
   // A stadium/pill shape spanning a winning sequence's five cells, rotated to match
@@ -400,24 +419,35 @@ export class BoardView {
 
     // The card is already drawn underneath every chip above, so dragging the chip
     // aside to peek is just this cell's chip getting an offset — nothing else about
-    // the cell needs to know a peek is happening.
+    // the cell needs to know a peek is happening. The dragged chip itself is drawn
+    // in a separate pass after every cell (see draw()/_drawDraggedChip below)
+    // instead of inline here: cells are painted in index order, so a chip dragged
+    // toward a higher-indexed neighbor (right or down) would otherwise get painted
+    // straight over by that neighbor's own card art later in the same loop —
+    // exactly backwards from a chip dragged left/up, which lands on
+    // already-painted cells and so stayed visible. Drawing it last guarantees it's
+    // always on top, regardless of which direction it was dragged.
     const dragOff = (this.peekDrag && this.peekDrag.index === index) ? this.peekDrag : null;
     if (team != null) {
       const r = Math.min(w, h) * 0.34;
-      const cx = sx + w / 2 + (dragOff ? dragOff.dx : 0);
-      const cy = sy + h / 2 + (dragOff ? dragOff.dy : 0);
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.fillStyle = TEAM_COLOR[team];
-      ctx.fill();
-      ctx.lineWidth = Math.max(1, Math.min(w, h) * 0.03);
-      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-      ctx.stroke();
-      if (this.locked.has(index)) {
+      if (dragOff) {
+        this._pendingDragChip = {
+          cx: sx + w / 2 + dragOff.dx, cy: sy + h / 2 + dragOff.dy, r, team, locked: this.locked.has(index),
+        };
+      } else {
         ctx.beginPath();
-        ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.arc(sx + w / 2, sy + h / 2, r, 0, Math.PI * 2);
+        ctx.fillStyle = TEAM_COLOR[team];
         ctx.fill();
+        ctx.lineWidth = Math.max(1, Math.min(w, h) * 0.03);
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+        ctx.stroke();
+        if (this.locked.has(index)) {
+          ctx.beginPath();
+          ctx.arc(sx + w / 2, sy + h / 2, r * 0.42, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255,255,255,0.85)';
+          ctx.fill();
+        }
       }
     }
     if (dragOff && (dragOff.dx !== 0 || dragOff.dy !== 0)) {

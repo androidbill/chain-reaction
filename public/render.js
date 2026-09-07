@@ -368,11 +368,11 @@ export class BoardView {
         const suit = cardSuit(code);
         const rank = cardRank(code);
         ctx.fillStyle = SUIT_COLOR[suit] === 'red' ? '#b8302a' : '#22262e';
-        ctx.font = `700 ${w * 0.6}px system-ui, sans-serif`;
+        ctx.font = `700 ${w * 0.5}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(rank, sx + w / 2, sy + h * 0.32);
-        ctx.font = `${w * 0.68}px system-ui, sans-serif`;
+        ctx.font = `${w * 0.56}px system-ui, sans-serif`;
         ctx.fillText(SUIT_SYMBOL[suit], sx + w / 2, sy + h * 0.68);
       }
     }

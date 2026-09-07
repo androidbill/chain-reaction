@@ -110,10 +110,17 @@ function playTone(freq, { start = 0, duration = 0.16, type = 'sine', volume = 0.
 }
 // A rising two-note chime — distinct from the move tick so "it's your turn"
 // never gets confused with "someone just played a card".
+// Same notes and timing as HexColony's sfx.yourTurn(): a low root note under a rising
+// three-note arpeggio, staggered 90ms apart. HexColony's version also runs each note
+// through a shared compressor/reverb chain built for its whole soundscape — not worth
+// pulling in for one cue here, but the pitches/rhythm are what actually make it
+// recognizable as "that sound", and those are reproduced exactly.
 function playTurnSound() {
   ensureAudio();
-  playTone(587, { start: 0, duration: 0.14, type: 'sine', volume: 0.22 });
-  playTone(784, { start: 0.12, duration: 0.22, type: 'sine', volume: 0.24 });
+  playTone(262, { start: 0, duration: 0.34, type: 'triangle', volume: 0.14 }); // C4
+  playTone(784, { start: 0, duration: 0.26, type: 'triangle', volume: 0.17 }); // G5
+  playTone(1047, { start: 0.09, duration: 0.26, type: 'triangle', volume: 0.17 }); // C6
+  playTone(1319, { start: 0.18, duration: 0.26, type: 'triangle', volume: 0.17 }); // E6
 }
 // A single short, low-key tick for any card played (place, remove, or wild).
 function playMoveSound() {
@@ -1250,6 +1257,11 @@ let lastVotesSignature = null;
 function showWinOverlay(winnerTeam) {
   const overlay = $('win-overlay');
   const game = room.game;
+  // updateTurnTimer() already stops the timer once room.state !== 'playing', but that
+  // depends on renderGame() reaching it on the same render pass this overlay comes
+  // from — belt and suspenders, since a stray running interval this late would sit
+  // right on top of a "wins!" overlay the whole table is looking at.
+  stopTurnTimer();
   $('win-title').textContent = `🎉 Team ${TEAM_NAMES[winnerTeam]} wins!`;
 
   const durationEl = $('stats-duration');
@@ -1289,7 +1301,15 @@ function showWinOverlay(winnerTeam) {
 
   overlay.hidden = false;
 
-  const signature = order.filter((pid) => votes[pid]).sort().join(',');
+  // Keyed on this specific finish (room.finishedAt), not just who has voted — a bare
+  // vote signature repeats identically across replays in the same room (the same two
+  // players agreeing looks the same every time), so without a per-game key the second
+  // "2 of 2 agreed" in a session would already equal lastVotesSignature from the
+  // first, and the change check below would never fire the transaction at all. This
+  // was a real bug, not a hypothetical: any second play-again in the same room visit
+  // would silently do nothing.
+  const finishKey = room.finishedAt && room.finishedAt.toMillis ? room.finishedAt.toMillis() : 'unknown';
+  const signature = finishKey + ':' + order.filter((pid) => votes[pid]).sort().join(',');
   if (signature !== lastVotesSignature) {
     lastVotesSignature = signature;
     maybeStartNextGame();
@@ -1314,7 +1334,17 @@ async function maybeStartNextGame() {
       const patch = dealNewGamePatch(order, data.settings.teamCount);
       tx.update(roomRef, { state: 'playing', paused: false, pausedBy: null, ...patch });
     });
-  } catch (e) { /* lost the race or votes incomplete — fine */ }
+  } catch (e) {
+    // A genuinely benign race (another client's transaction already moved the room to
+    // 'playing') resolves inside the transaction body above via the state !== 'finished'
+    // check, not by throwing — Firestore retries contention internally. So an error that
+    // actually reaches here is far more likely a real failure than a race, and staying
+    // silent about it is exactly how "everyone voted and nothing happened" goes
+    // unreported. Every connected client calls this independently on each vote change,
+    // so a structural failure surfaces on all of them, not just whoever clicked last.
+    console.error(e);
+    toast('Could not start the next game — try Play Again once more');
+  }
 }
 
 $('btn-play-again').addEventListener('click', async () => {

@@ -25,6 +25,8 @@ export class BoardView {
     this.flashIndex = null;
     this.flashStart = 0;
     this._flashRaf = null;
+    this.peekIndex = null;
+    this._peekTimeout = null;
 
     canvas.style.touchAction = 'none';
     canvas.addEventListener('pointerdown', (e) => this._onDown(e));
@@ -130,6 +132,20 @@ export class BoardView {
     }
     this.draw();
     this._flashRaf = requestAnimationFrame(() => this._flashLoop());
+  }
+
+  // Lets anyone see the card under a chip for a couple of seconds without changing
+  // anything — the card is already drawn under every chip (see _drawCell), so this
+  // just skips drawing the chip itself over that one cell for a moment. Purely a
+  // single before/after redraw, no animation loop needed since nothing moves.
+  peekCell(index) {
+    this.peekIndex = index;
+    clearTimeout(this._peekTimeout);
+    this.draw();
+    this._peekTimeout = setTimeout(() => {
+      this.peekIndex = null;
+      this.draw();
+    }, 2000);
   }
 
   destroy() {
@@ -282,7 +298,11 @@ export class BoardView {
       }
     }
 
-    if (team != null) {
+    const peeking = index === this.peekIndex;
+    // The card is already drawn underneath every chip, so peeking just means
+    // skipping the chip itself for this one cell — no separate "reveal" drawing path
+    // to keep in sync with the real one above.
+    if (team != null && !peeking) {
       const r = Math.min(w, h) * 0.34;
       ctx.beginPath();
       ctx.arc(sx + w / 2, sy + h / 2, r, 0, Math.PI * 2);
@@ -297,6 +317,12 @@ export class BoardView {
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
         ctx.fill();
       }
+    }
+    if (peeking) {
+      ctx.strokeStyle = '#ffd633';
+      ctx.lineWidth = Math.max(2, Math.min(w, h) * 0.06);
+      roundRect(ctx, sx + ctx.lineWidth / 2, sy + ctx.lineWidth / 2, w - ctx.lineWidth, h - ctx.lineWidth, radius);
+      ctx.stroke();
     }
 
     if (index === this.flashIndex) {

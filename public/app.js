@@ -849,17 +849,28 @@ function renderHand() {
 }
 
 function onBoardPick(index) {
-  if (!isMyTurn() || pendingMove) return;
   const game = room.game;
-  const teamCount = room.settings.teamCount;
-  const sequences = computeSequences(game.board, teamCount);
-  const locked = lockedIndicesFrom(sequences);
-  const hand = game.hands[playerId] || [];
-  const map = autoResolveTargets(game.board, hand, locked);
-  const entry = map.get(index);
-  if (!entry) return;
-  if (UNDO_ENABLED) startPendingMove(entry, index);
-  else applyMove(entry.instanceId, index, entry.action);
+  if (!game) return;
+  if (isMyTurn() && !pendingMove) {
+    const teamCount = room.settings.teamCount;
+    const sequences = computeSequences(game.board, teamCount);
+    const locked = lockedIndicesFrom(sequences);
+    const hand = game.hands[playerId] || [];
+    const map = autoResolveTargets(game.board, hand, locked);
+    const entry = map.get(index);
+    if (entry) {
+      if (UNDO_ENABLED) startPendingMove(entry, index);
+      else applyMove(entry.instanceId, index, entry.action);
+      return;
+    }
+  }
+  // Not a move this tap can make right now (not your turn, no matching card, or the
+  // cell just isn't a legal target) — if there's a chip sitting on it, let anyone peek
+  // at the card underneath. Purely local and visual: nothing is written anywhere, so
+  // it works for every player, on every turn, with no risk of racing a real move.
+  // (Corners are always null in game.board — they never carry a chip — so this can
+  // never fire for one; no need to check isCorner separately.)
+  if (game.board[index] != null) boardView.peekCell(index);
 }
 
 $('btn-dead-card').addEventListener('click', () => {

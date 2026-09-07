@@ -25,8 +25,7 @@ export class BoardView {
     this.flashIndex = null;
     this.flashStart = 0;
     this._flashRaf = null;
-    this.peekIndex = null;
-    this._peekTimeout = null;
+    this.peekDrag = null; // { index, dx, dy } — set while a finger is dragging a chip aside
 
     canvas.style.touchAction = 'none';
     canvas.addEventListener('pointerdown', (e) => this._onDown(e));
@@ -134,18 +133,28 @@ export class BoardView {
     this._flashRaf = requestAnimationFrame(() => this._flashLoop());
   }
 
-  // Lets anyone see the card under a chip for a couple of seconds without changing
-  // anything — the card is already drawn under every chip (see _drawCell), so this
-  // just skips drawing the chip itself over that one cell for a moment. Purely a
-  // single before/after redraw, no animation loop needed since nothing moves.
-  peekCell(index) {
-    this.peekIndex = index;
-    clearTimeout(this._peekTimeout);
-    this.draw();
-    this._peekTimeout = setTimeout(() => {
-      this.peekIndex = null;
+  // Animates a dragged chip's offset back to (0,0) once the finger lifts, then clears
+  // the drag — the "zooms back over the card" half of the gesture. Reads its distance
+  // fresh each frame from whatever peekDrag currently holds, so if a new drag starts
+  // on another cell mid-animation (this one's inherently over, since dx/dy belong to
+  // the index that was being dragged) this loop just naturally stops mattering.
+  _snapBackPeek() {
+    const drag = this.peekDrag;
+    if (!drag) return;
+    const startDx = drag.dx, startDy = drag.dy;
+    const t0 = performance.now();
+    const DUR = 220;
+    const step = () => {
+      if (this.peekDrag !== drag) return; // superseded by a new drag or another snap-back
+      const t = Math.min(1, (performance.now() - t0) / DUR);
+      const ease = 1 - (1 - t) ** 3;
+      drag.dx = startDx * (1 - ease);
+      drag.dy = startDy * (1 - ease);
       this.draw();
-    }, 2000);
+      if (t < 1) requestAnimationFrame(step);
+      else { this.peekDrag = null; this.draw(); }
+    };
+    requestAnimationFrame(step);
   }
 
   destroy() {
@@ -174,12 +183,23 @@ export class BoardView {
     if (this.pointers.size === 1) {
       const [p] = this.pointers.values();
       this.dragStart = { x: p.x, y: p.y };
+      // Coming down on a covered cell starts a peek-drag instead of panning the
+      // board: the chip follows the finger (see _onMove/_drawCell) instead of the
+      // whole camera moving. A plain tap in place (see _onUp) still falls through
+      // to onPick as before, so a legal move (a removal, most likely) still happens —
+      // only an actual drag is peek-only.
+      const rect = this.canvas.getBoundingClientRect();
+      const idx = this.hitTest(p.x - rect.left, p.y - rect.top);
+      this.peekDrag = (idx >= 0 && this.board[idx] != null) ? { index: idx, dx: 0, dy: 0 } : null;
     } else if (this.pointers.size === 2) {
       const pts = [...this.pointers.values()];
       this.pinch = {
         dist: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
         mid: [(pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2],
       };
+      // A second finger means this is turning into a pinch, not a one-finger peek —
+      // snap whatever was being dragged back rather than leaving it stranded off-cell.
+      this._snapBackPeek();
     }
   }
 
@@ -192,11 +212,16 @@ export class BoardView {
       const prev = { x: this.dragStart.x - rect.left, y: this.dragStart.y - rect.top };
       const dx = p.x - prev.x;
       const dy = p.y - prev.y;
-      this.ox += dx;
-      this.oy += dy;
       this.moved += Math.abs(dx) + Math.abs(dy);
       this.dragStart = { x: e.clientX, y: e.clientY };
-      this.clampPan();
+      if (this.peekDrag) {
+        this.peekDrag.dx += dx;
+        this.peekDrag.dy += dy;
+      } else {
+        this.ox += dx;
+        this.oy += dy;
+        this.clampPan();
+      }
       this.draw();
     } else if (this.pointers.size === 2 && this.pinch) {
       const pts = [...this.pointers.values()];
@@ -217,6 +242,19 @@ export class BoardView {
     this.pointers.delete(e.pointerId);
     if (this.pointers.size < 2) this.pinch = null;
     if (this.pointers.size === 0) this.dragStart = null;
+
+    if (this.peekDrag) {
+      const idx = this.peekDrag.index;
+      // A real drag (moved past the tap threshold) was purely a peek — releasing it
+      // just snaps the chip back and does nothing else. A tap-in-place still plays
+      // whatever move that cell is legal for, same as before this gesture existed.
+      this._snapBackPeek();
+      if (wasTap && last) {
+        const px = last.x - rect.left, py = last.y - rect.top;
+        if (this.hitTest(px, py) === idx) this.onPick(idx);
+      }
+      return;
+    }
     if (wasTap && last) {
       const px = last.x - rect.left;
       const py = last.y - rect.top;
@@ -298,14 +336,16 @@ export class BoardView {
       }
     }
 
-    const peeking = index === this.peekIndex;
-    // The card is already drawn underneath every chip, so peeking just means
-    // skipping the chip itself for this one cell — no separate "reveal" drawing path
-    // to keep in sync with the real one above.
-    if (team != null && !peeking) {
+    // The card is already drawn underneath every chip above, so dragging the chip
+    // aside to peek is just this cell's chip getting an offset — nothing else about
+    // the cell needs to know a peek is happening.
+    const dragOff = (this.peekDrag && this.peekDrag.index === index) ? this.peekDrag : null;
+    if (team != null) {
       const r = Math.min(w, h) * 0.34;
+      const cx = sx + w / 2 + (dragOff ? dragOff.dx : 0);
+      const cy = sy + h / 2 + (dragOff ? dragOff.dy : 0);
       ctx.beginPath();
-      ctx.arc(sx + w / 2, sy + h / 2, r, 0, Math.PI * 2);
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
       ctx.fillStyle = TEAM_COLOR[team];
       ctx.fill();
       ctx.lineWidth = Math.max(1, Math.min(w, h) * 0.03);
@@ -313,12 +353,12 @@ export class BoardView {
       ctx.stroke();
       if (this.locked.has(index)) {
         ctx.beginPath();
-        ctx.arc(sx + w / 2, sy + h / 2, r * 0.42, 0, Math.PI * 2);
+        ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255,255,255,0.85)';
         ctx.fill();
       }
     }
-    if (peeking) {
+    if (dragOff && (dragOff.dx !== 0 || dragOff.dy !== 0)) {
       ctx.strokeStyle = '#ffd633';
       ctx.lineWidth = Math.max(2, Math.min(w, h) * 0.06);
       roundRect(ctx, sx + ctx.lineWidth / 2, sy + ctx.lineWidth / 2, w - ctx.lineWidth, h - ctx.lineWidth, radius);

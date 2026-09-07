@@ -897,12 +897,11 @@ function onBoardPick(index) {
     }
   }
   // Not a move this tap can make right now (not your turn, no matching card, or the
-  // cell just isn't a legal target) — if there's a chip sitting on it, let anyone peek
-  // at the card underneath. Purely local and visual: nothing is written anywhere, so
-  // it works for every player, on every turn, with no risk of racing a real move.
-  // (Corners are always null in game.board — they never carry a chip — so this can
-  // never fire for one; no need to check isCorner separately.)
-  if (game.board[index] != null) boardView.peekCell(index);
+  // cell just isn't a legal target) — nothing else happens on a plain tap. Peeking at
+  // a covered card is a press-and-drag gesture handled entirely inside BoardView
+  // (see peekDrag in render.js): dragging the chip aside reveals the card underneath
+  // for as long as it's held, and it's purely local/visual, so it works for any
+  // player on any turn with no risk of racing a real move.
 }
 
 $('btn-dead-card').addEventListener('click', () => {

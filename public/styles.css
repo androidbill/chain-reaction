@@ -187,6 +187,46 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
 .win-overlay { position: fixed; inset: 0; background: rgba(10,14,23,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 100; text-align: center; padding: 24px; }
 .win-overlay h2 { font-size: 30px; margin: 0; }
 .stats-overlay { justify-content: flex-start; padding-top: calc(48px + var(--safe-t)); }
+
+/* ---------- Win celebration: winning sequences glow on the board (see
+   BoardView.celebrateSequences) while this shows the winners' names over a burst of
+   confetti, for the few seconds before the stats screen takes over. ---------- */
+.win-celebrate {
+  position: fixed; inset: 0; z-index: 45;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+.win-celebrate-names {
+  position: relative; z-index: 2;
+  padding: 18px 36px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(13, 27, 40, 0.14);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  font-size: clamp(22px, 7vw, 40px); font-weight: 800; color: #22262e;
+  text-align: center; max-width: calc(100% - 32px);
+  animation: win-names-in .32s cubic-bezier(.2, 1.4, .4, 1) both;
+}
+@keyframes win-names-in { from { transform: scale(0.7); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+.confetti-field { position: absolute; inset: 0; z-index: 1; }
+.confetti-piece {
+  position: absolute; top: -20px; width: 9px; height: 15px;
+  opacity: 0.95;
+  animation-name: confetti-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+@keyframes confetti-fall {
+  from { transform: translateY(0) rotate(0deg); }
+  to { transform: translateY(115vh) rotate(var(--spin, 480deg)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .win-celebrate-names { animation: none; }
+  .confetti-piece { display: none; }
+}
 .stats-duration { color: var(--text-dim); margin: 0; font-size: 14px; }
 .stats-scroll { width: 100%; max-width: 420px; flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .stats-section h4 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); text-align: left; }

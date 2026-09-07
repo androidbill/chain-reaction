@@ -95,6 +95,14 @@
   </div>
 </div>
 
+<!-- Runs for 3s right after a win, before the stats screen: the winning sequences
+     glow on the board underneath this, while this shows the winners' names over a
+     confetti burst. -->
+<div class="win-celebrate" id="win-celebrate" hidden>
+  <div class="confetti-field" id="confetti-field"></div>
+  <div class="win-celebrate-names" id="win-celebrate-names"></div>
+</div>
+
 <div class="win-overlay stats-overlay" id="win-overlay" hidden>
   <h2 id="win-title">🎉 Team wins!</h2>
   <p class="stats-duration" id="stats-duration"></p>

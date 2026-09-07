@@ -57,6 +57,8 @@ let pendingMoveTimeout = null;
 let lastSeenMoveTs = undefined; // undefined = not initialized yet for this room
 let wasMyTurn = undefined; // undefined = not initialized yet for this room
 let lastAnnouncedPid = undefined; // undefined = not initialized yet for this room
+let celebratedFinishKey = null;
+let celebrating = false;
 let timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
 let timerIntervalId = null;
 let deferredInstallPrompt = null;
@@ -443,6 +445,8 @@ function enterRoom(code) {
   wasMyTurn = undefined;
   lastAnnouncedPid = undefined;
   lastVotesSignature = null;
+  celebratedFinishKey = null;
+  celebrating = false;
   localStorage.setItem('cr_room', code);
   startClockPing();
   subscribeRoom();
@@ -548,7 +552,24 @@ function applyRoom() {
       toast('Render error: ' + (e && e.message ? e.message : e));
     }
     if (room.state === 'finished' && room.game && room.game.winnerTeam != null) {
-      showWinOverlay(room.game.winnerTeam);
+      // Keyed on room.finishedAt so this fires exactly once per finish (not once per
+      // render — every snapshot delivery while finished, e.g. a clock ping, would
+      // otherwise retrigger it) and so a second win later in the same room session
+      // (after Play Again) isn't mistaken for one already celebrated. Same fix shape
+      // as the earlier Play Again vote-signature bug — a bare state check without a
+      // per-game key silently breaks on the second occurrence.
+      const finishKey = room.finishedAt && room.finishedAt.toMillis ? room.finishedAt.toMillis() : null;
+      if (finishKey != null && finishKey !== celebratedFinishKey && !celebrating) {
+        celebratedFinishKey = finishKey;
+        celebrating = true;
+        runWinCelebration(room.game, room.game.winnerTeam, () => {
+          celebrating = false;
+          showWinOverlay(room.game.winnerTeam);
+        });
+      } else if (!celebrating && finishKey === celebratedFinishKey) {
+        showWinOverlay(room.game.winnerTeam);
+      }
+      // else: celebration already in flight — the stats screen waits for it.
     }
   }
 }
@@ -1276,6 +1297,65 @@ function formatDuration(ms) {
   const m = Math.floor(totalSec / 60);
   const s = totalSec % 60;
   return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+// Runs before the stats screen: highlights the winning sequences on the board with a
+// pill outlined in the winning team's colour, pops the winners' names over a confetti
+// burst, holds all of it for 3s, then hands off to the caller (normally
+// showWinOverlay). computeSequences() gives back the actual sequence cells rather
+// than trusting anything stored — nothing about the win is written to Firestore
+// beyond winnerTeam itself, and this recomputes the same way every other render does.
+const WIN_CELEBRATION_MS = 3000;
+function runWinCelebration(game, winnerTeam, onDone) {
+  const teamCount = room.settings.teamCount;
+  const sequences = computeSequences(game.board, teamCount).filter((s) => s.team === winnerTeam);
+  boardView.celebrateSequences(sequences.map((s) => s.cells), TEAM_COLOR[winnerTeam]);
+
+  const order = room.order && room.order.length ? room.order : Object.keys(room.players);
+  const names = order
+    .map((pid) => room.players[pid])
+    .filter((p) => p && p.team === winnerTeam)
+    .map((p) => p.name);
+  showWinConfetti(names, TEAM_COLOR[winnerTeam]);
+
+  setTimeout(() => {
+    boardView.clearCelebration();
+    hideWinConfetti();
+    onDone();
+  }, WIN_CELEBRATION_MS);
+}
+
+function namesJoinedForWin(names) {
+  if (names.length === 0) return 'They win!';
+  if (names.length === 1) return `${names[0]} wins!`;
+  return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]} win!`;
+}
+
+function showWinConfetti(names, color) {
+  $('win-celebrate-names').textContent = namesJoinedForWin(names);
+  spawnConfetti(color);
+  $('win-celebrate').hidden = false;
+}
+function hideWinConfetti() {
+  $('win-celebrate').hidden = true;
+  $('confetti-field').innerHTML = '';
+}
+function spawnConfetti(teamColor, count = 60) {
+  const field = $('confetti-field');
+  field.innerHTML = '';
+  const palette = [teamColor, '#ffd633', '#3fb56b', '#3b7fe0', '#e0473c'];
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < count; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-piece';
+    p.style.background = palette[Math.floor(Math.random() * palette.length)];
+    p.style.left = Math.random() * 100 + '%';
+    p.style.animationDuration = (2 + Math.random() * 1.4) + 's';
+    p.style.animationDelay = (Math.random() * 0.5) + 's';
+    p.style.setProperty('--spin', Math.round(360 + Math.random() * 540) + 'deg');
+    frag.appendChild(p);
+  }
+  field.appendChild(frag);
 }
 
 let lastVotesSignature = null;

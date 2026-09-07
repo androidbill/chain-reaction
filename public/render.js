@@ -26,6 +26,7 @@ export class BoardView {
     this.flashStart = 0;
     this._flashRaf = null;
     this.peekDrag = null; // { index, dx, dy } — set while a finger is dragging a chip aside
+    this.celebrating = []; // [{ cells, color }] — winning sequences held highlighted after a win
 
     canvas.style.touchAction = 'none';
     canvas.addEventListener('pointerdown', (e) => this._onDown(e));
@@ -131,6 +132,18 @@ export class BoardView {
     }
     this.draw();
     this._flashRaf = requestAnimationFrame(() => this._flashLoop());
+  }
+
+  // Holds one or more winning sequences highlighted with a pill in the winning
+  // team's colour until clearCelebration() is called — the caller (app.js) owns the
+  // 3s timing, this just draws whatever it's told to for as long as it's told to.
+  celebrateSequences(cellsList, color) {
+    this.celebrating = cellsList.map((cells) => ({ cells, color }));
+    this.draw();
+  }
+  clearCelebration() {
+    this.celebrating = [];
+    this.draw();
   }
 
   // Animates a dragged chip's offset back to (0,0) once the finger lifts, then clears
@@ -284,6 +297,34 @@ export class BoardView {
     for (let i = 0; i < BOARD_SIZE * BOARD_SIZE; i++) {
       this._drawCell(i);
     }
+    for (const seq of this.celebrating) this._drawSequencePill(seq.cells, seq.color);
+  }
+
+  // A stadium/pill shape spanning a winning sequence's five cells, rotated to match
+  // whichever of the four directions (row, column, either diagonal) the sequence
+  // actually runs in — computed from the endpoints' screen positions rather than
+  // assumed, so it's correct at any pan/zoom without needing to know the direction.
+  _drawSequencePill(cellsIndices, color) {
+    const ctx = this.ctx;
+    const first = cellCenter(cellsIndices[0]);
+    const last = cellCenter(cellsIndices[cellsIndices.length - 1]);
+    const [sx0, sy0] = this.toScreen(...first);
+    const [sx1, sy1] = this.toScreen(...last);
+    const angle = Math.atan2(sy1 - sy0, sx1 - sx0);
+    const segLen = Math.hypot(sx1 - sx0, sy1 - sy0);
+    const cellSpan = Math.max(CELL_W, CELL_H) * this.scale;
+    const length = segLen + cellSpan * 0.95; // reach past the end cells' own centers
+    const thickness = Math.min(CELL_W, CELL_H) * this.scale * 0.62;
+    ctx.save();
+    ctx.translate((sx0 + sx1) / 2, (sy0 + sy1) / 2);
+    ctx.rotate(angle);
+    ctx.fillStyle = color + '4d'; // ~30% alpha, an 8-digit hex CSS color
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(2, thickness * 0.09);
+    roundRect(ctx, -length / 2, -thickness / 2, length, thickness, thickness / 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
   }
 
   _drawCell(index) {

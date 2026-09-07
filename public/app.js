@@ -682,8 +682,15 @@ function applyRoom() {
   updateGameKebabVisibility();
   // The next round already started (or this client left the finished game some other
   // way) — showWinOverlay(), which is what re-arms this timer, no longer runs, so it
-  // has to be stopped explicitly here or it would just keep firing forever.
-  if (room.state !== 'finished') stopPlayAgainRetry();
+  // has to be stopped explicitly here or it would just keep firing forever. The
+  // overlay itself needs the same explicit hide: it isn't a .screen (showScreen()
+  // below never touches it), and nothing else was hiding it on the online Play
+  // Again path — solo's own play-again handler hid it directly, but voting into a
+  // new round online left it sitting on screen with the new game underneath it.
+  if (room.state !== 'finished') {
+    stopPlayAgainRetry();
+    $('win-overlay').hidden = true;
+  }
   if (room.state === 'lobby') { renderLobby(); showScreen('screen-lobby'); }
   else if (room.state === 'playing' || room.state === 'finished') {
     showScreen('screen-game');

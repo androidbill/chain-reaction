@@ -327,6 +327,12 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
 .card-fly.red { color: #b8302a; }
 .card-fly .r { font-size: min(20vw, 20vh); }
 .card-fly .s { font-size: min(22vw, 22vh); }
+/* A wild/removal play shows the actual illustrated jack instead of a plain rank/suit
+   face — the image already looks like a full card, so the plain-card background and
+   shadow this element normally draws behind the rank/suit text would just double up
+   with it. */
+.card-fly.image-mode { background: transparent; box-shadow: none; }
+.card-fly-img { width: 100%; height: 100%; object-fit: contain; border-radius: 18px; display: block; }
 @keyframes card-fly-spin-in {
   from { transform: translate(-50%, -50%) scale(0.3) rotate(720deg); opacity: 0; }
   to { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; }

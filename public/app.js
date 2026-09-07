@@ -177,6 +177,7 @@ const CORE_FILES = [
   'firebase-config.js', 'version.js', 'styles.css', 'manifest.webmanifest',
   'sounds/turn-sound.mp3', 'sounds/card-lay-sound.mp3', 'sounds/wild-card-sound.mp3',
   'sounds/remove-card-sound.mp3', 'sounds/sequence-sound.mp3', 'sounds/win-sound.mp3',
+  'images/jack-wild.png', 'images/jack-removal.png',
 ];
 let refreshing = false;
 async function fullRefresh() {
@@ -1930,11 +1931,29 @@ function scheduleMoveEffects(fn, delayMs) {
 // the player has panned or zoomed the board.
 function showCardFly(move) {
   const el = $('card-fly');
-  const rank = cardRank(move.code);
-  const suit = cardSuit(move.code);
-  el.className = 'card-fly' + (SUIT_COLOR[suit] === 'red' ? ' red' : '');
-  $('card-fly-r').textContent = rank;
-  $('card-fly-s').textContent = SUIT_SYMBOL[suit];
+  const rEl = $('card-fly-r');
+  const sEl = $('card-fly-s');
+  const imgEl = $('card-fly-img');
+  const isWild = isTwoEyedJack(move.code);
+  const isRemoval = isOneEyedJack(move.code);
+  if (isWild || isRemoval) {
+    // The illustrated jack itself already reads as "wild"/"removal" at a glance —
+    // no rank/suit text needed on top of it.
+    el.className = 'card-fly image-mode';
+    rEl.hidden = true;
+    sEl.hidden = true;
+    imgEl.src = isWild ? 'images/jack-wild.png' : 'images/jack-removal.png';
+    imgEl.hidden = false;
+  } else {
+    const rank = cardRank(move.code);
+    const suit = cardSuit(move.code);
+    el.className = 'card-fly' + (SUIT_COLOR[suit] === 'red' ? ' red' : '');
+    rEl.hidden = false;
+    sEl.hidden = false;
+    rEl.textContent = rank;
+    sEl.textContent = SUIT_SYMBOL[suit];
+    imgEl.hidden = true;
+  }
   el.style.left = '50%';
   el.style.top = '42%';
   el.style.animation = ''; // clear any leftover override from a previous play's landing (see below)

@@ -22,6 +22,8 @@ const CORE = [
   'sounds/remove-card-sound.mp3',
   'sounds/sequence-sound.mp3',
   'sounds/win-sound.mp3',
+  'images/jack-wild.png',
+  'images/jack-removal.png',
 ];
 
 self.addEventListener('install', (event) => {

@@ -1944,8 +1944,8 @@ function showCardFly(move) {
     showCardFly._t2 = setTimeout(() => {
       el.hidden = true;
       el.classList.remove('show', 'landing');
-    }, 420);
-  }, 1000); // held large and centered for 1s before flying down to the landed cell
+    }, 460);
+  }, 1500); // ~0.5s spinning to a stop, then held still and readable for 1s before spinning back down
 }
 
 function formatDuration(ms) {

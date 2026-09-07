@@ -332,19 +332,29 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
   width: min(66vw, 66vh); aspect-ratio: 0.72; border-radius: 18px; background: #f4efe4;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   font-weight: 800; color: #22262e; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-  transform: translate(-50%, -50%) scale(1);
-  transition: transform .38s cubic-bezier(.3,.1,.3,1), left .38s cubic-bezier(.3,.1,.3,1), top .38s cubic-bezier(.3,.1,.3,1), opacity .2s ease .2s;
+  transform: translate(-50%, -50%) scale(1) rotate(0deg);
+  transition: transform .42s cubic-bezier(.3,.1,.3,1), left .42s cubic-bezier(.3,.1,.3,1), top .42s cubic-bezier(.3,.1,.3,1), opacity .2s ease .2s;
   opacity: 0;
   pointer-events: none;
 }
-.card-fly.show { opacity: 1; }
-.card-fly.landing { transform: translate(-50%, -50%) scale(0.06); opacity: 0; }
+/* Spins in large and to a stop (see the appear-spin keyframes below), holds still so
+   the card is actually readable, then .landing takes over — the ordinary transition
+   above carries transform (now including a couple more rotate() turns) and left/top
+   together down to the exact cell it landed on, so it reads as one continuous spin
+   in and back down rather than two disconnected motions. */
+.card-fly.show { opacity: 1; animation: card-fly-spin-in .5s cubic-bezier(.2,.7,.3,1) forwards; }
+.card-fly.landing { transform: translate(-50%, -50%) scale(0.06) rotate(-540deg); opacity: 0; }
 .card-fly.red { color: #b8302a; }
 .card-fly .r { font-size: min(20vw, 20vh); }
 .card-fly .s { font-size: min(22vw, 22vh); }
+@keyframes card-fly-spin-in {
+  from { transform: translate(-50%, -50%) scale(0.3) rotate(720deg); opacity: 0; }
+  to { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; }
+}
 @media (prefers-reduced-motion: reduce) {
   .turn-announce-text, .card-fly { transition: opacity .12s linear; }
-  .card-fly.landing { transform: translate(-50%, -50%) scale(1); }
+  .card-fly.show { animation: none; }
+  .card-fly.landing { transform: translate(-50%, -50%) scale(1) rotate(0deg); }
 }
 
 /* ---------- Kebab menu ---------- */

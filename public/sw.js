@@ -24,6 +24,7 @@ const CORE = [
   'sounds/win-sound.mp3',
   'images/jack-wild.png',
   'images/jack-removal.png',
+  'images/chip-button.png',
 ];
 
 self.addEventListener('install', (event) => {

@@ -18,8 +18,24 @@ export function setTeamColors(colors) {
   }
 }
 
+// A team's chip is this white poker-chip image tinted per-team at draw time (see
+// _drawChip) rather than a separate pre-colored asset per team/custom color —
+// team colors are editable per room (the lobby's color wheel), so a fixed set of
+// pre-tinted images could never cover every choice. Shared across BoardView
+// instances (there's only ever one on screen) and drawn as a plain circle until
+// it finishes loading, so the board never waits on it.
+const chipImage = new Image();
+let chipImageReady = false;
+let boardViewNeedingChipRedraw = null;
+chipImage.onload = () => {
+  chipImageReady = true;
+  if (boardViewNeedingChipRedraw) boardViewNeedingChipRedraw.draw();
+};
+chipImage.src = './images/chip-button.png';
+
 export class BoardView {
   constructor(canvas, { onPick } = {}) {
+    boardViewNeedingChipRedraw = this;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.onPick = onPick || (() => {});
@@ -324,14 +340,40 @@ export class BoardView {
   }
 
   _drawDraggedChip({ cx, cy, r, team, locked }) {
+    this._drawChip(cx, cy, r, team, locked);
+  }
+
+  // Draws the chip-button image tinted to the team's color, or a plain filled
+  // circle as a fallback until the image has loaded. The tint is a standard
+  // "multiply then clip back to the source's own alpha" recipe: multiplying a
+  // solid color over the white/gray chip darkens each pixel in proportion to how
+  // shaded it already was (so the bevel and highlight the artwork drew are still
+  // visible, just recolored) while a plain source-over fill would just paint a flat
+  // disc over it; 'destination-in' with the original image afterward re-clips the
+  // now-rectangular multiply fill back to the chip's actual round silhouette.
+  _drawChip(cx, cy, r, team, locked) {
     const ctx = this.ctx;
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fillStyle = TEAM_COLOR[team];
-    ctx.fill();
-    ctx.lineWidth = Math.max(1, r * 0.09);
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    ctx.stroke();
+    const color = TEAM_COLOR[team];
+    if (!chipImageReady) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = Math.max(1, r * 0.09);
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.stroke();
+    } else {
+      const d = r * 2;
+      const x = cx - r, y = cy - r;
+      ctx.save();
+      ctx.drawImage(chipImage, x, y, d, d);
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = color;
+      ctx.fillRect(x, y, d, d);
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.drawImage(chipImage, x, y, d, d);
+      ctx.restore();
+    }
     if (locked) {
       ctx.beginPath();
       ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2);
@@ -435,19 +477,7 @@ export class BoardView {
           cx: sx + w / 2 + dragOff.dx, cy: sy + h / 2 + dragOff.dy, r, team, locked: this.locked.has(index),
         };
       } else {
-        ctx.beginPath();
-        ctx.arc(sx + w / 2, sy + h / 2, r, 0, Math.PI * 2);
-        ctx.fillStyle = TEAM_COLOR[team];
-        ctx.fill();
-        ctx.lineWidth = Math.max(1, Math.min(w, h) * 0.03);
-        ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-        ctx.stroke();
-        if (this.locked.has(index)) {
-          ctx.beginPath();
-          ctx.arc(sx + w / 2, sy + h / 2, r * 0.42, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255,255,255,0.85)';
-          ctx.fill();
-        }
+        this._drawChip(sx + w / 2, sy + h / 2, r, team, this.locked.has(index));
       }
     }
     if (dragOff && (dragOff.dx !== 0 || dragOff.dy !== 0)) {

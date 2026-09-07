@@ -183,7 +183,7 @@ const CORE_FILES = [
   'firebase-config.js', 'version.js', 'styles.css', 'manifest.webmanifest',
   'sounds/turn-sound.mp3', 'sounds/card-lay-sound.mp3', 'sounds/wild-card-sound.mp3',
   'sounds/remove-card-sound.mp3', 'sounds/sequence-sound.mp3', 'sounds/win-sound.mp3',
-  'images/jack-wild.png', 'images/jack-removal.png',
+  'images/jack-wild.png', 'images/jack-removal.png', 'images/chip-button.png',
 ];
 let refreshing = false;
 async function fullRefresh() {

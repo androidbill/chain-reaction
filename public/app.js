@@ -69,6 +69,7 @@ let lastCompletedLinesCount = undefined; // undefined = not initialized yet for 
 // which reads this to keep a bot from playing its own move on top of the previous
 // move's animation still running.
 let animationsBusyUntil = 0;
+let highlightRevealTimeoutId = null; // reveals ambient highlight once animationsBusyUntil passes
 let celebratedFinishKey = null;
 let celebrating = false;
 let timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
@@ -563,6 +564,7 @@ function enterRoom(code) {
   lastAnnouncedPid = undefined;
   lastCompletedLinesCount = undefined;
   animationsBusyUntil = 0;
+  clearTimeout(highlightRevealTimeoutId);
   lastVotesSignature = null;
   celebratedFinishKey = null;
   celebrating = false;
@@ -658,6 +660,7 @@ function leaveRoom() {
   unsubRoom = null;
   stopClockPing();
   clearTimeout(botTimeoutId);
+  clearTimeout(highlightRevealTimeoutId);
   stopPlayAgainRetry();
   if (solo) clearSoloRoom();
   solo = false;
@@ -1064,6 +1067,7 @@ function enterSoloSession() {
   lastAnnouncedPid = undefined;
   lastCompletedLinesCount = undefined;
   animationsBusyUntil = 0;
+  clearTimeout(highlightRevealTimeoutId);
   celebratedFinishKey = null;
   celebrating = false;
   clockOffset = 0; // nothing but this device involved — no clock skew to correct for
@@ -1248,18 +1252,9 @@ function renderGame() {
     displayBoard[pendingMove.index] = pendingMove.action === 'place' ? myTeam() : null;
   }
 
-  let highlight = new Set();
-  if (isMyTurn() && !pendingMove) {
-    const hand = game.hands[playerId] || [];
-    highlight = ambientHighlightSet(game.board, hand, locked);
-  }
-  boardView.setState({ board: displayBoard, highlight, locked, myTeam: myTeam() });
-  renderPlayersStrip(sequences, teamCount, game.currentPlayerId);
-  $('hand-tray').classList.toggle('my-turn', isMyTurn());
-
-  const turnBanner = $('turn-banner');
   const curPid = game.currentPlayerId;
   const curPlayer = room.players[curPid];
+  const turnBanner = $('turn-banner');
   if (!curPlayer) {
     // The current player left, or turn state points at someone no longer in
     // the room — don't crash the render, just say so plainly.
@@ -1273,12 +1268,15 @@ function renderGame() {
   }
 
   // How long the current move's own card-fly animation will still be running for —
-  // computed below before the turn announcement, so a turn change landing on the
-  // very same move (the usual case: one move both finishes a card AND hands the
-  // turn to the next player) can hold off showing its "X's turn!" pill until the
-  // card animation is actually done, instead of popping up behind it (z-index
-  // aside, showing both large centered overlays on top of each other at once never
-  // reads as one wanting the other to move out of the way).
+  // computed below (before it's used just after, for both the highlight suppression
+  // and the turn announcement) so a turn change landing on the very same move (the
+  // usual case: one move both finishes a card AND hands the turn to the next
+  // player) can hold off showing its "X's turn!" pill, and hold off highlighting
+  // that next player's own playable spots, until the card animation is actually
+  // done — instead of either popping up on top of it (z-index aside, showing a
+  // large centered overlay over a still-playing one never reads as one wanting the
+  // other to move out of the way) or telling them where to tap while the board is
+  // still visibly mid-move.
   let cardFlyStillRunningMs = 0;
 
   if (game.lastMove && game.lastMove.ts !== lastSeenMoveTs) {
@@ -1286,24 +1284,48 @@ function renderGame() {
     lastSeenMoveTs = game.lastMove.ts;
     if (!isFirstLoad) {
       const move = game.lastMove;
-      // The announcement pill always shows and fully disappears before anything
-      // else about this move happens — the card sound/flash/fly-animation used to
-      // start at the exact same instant as the shoutout for an ordinary card play,
-      // which meant the pill was fading out mid-animation instead of being read on
-      // its own first.
-      showShoutout(move);
+      // An ordinary card play (not a wild, not a removal, didn't complete a line)
+      // gets no shoutout at all — just the card-fly. Everything else worth calling
+      // out (a timeout, a completed line, a wild, a removal) shows its pill first
+      // and fully disappears before anything else about that move happens, rather
+      // than starting the sound/flash/fly-animation at the same instant the pill
+      // appears.
+      const showsShoutout = move.type !== 'card' || move.completedLine
+        || isTwoEyedJack(move.code) || isOneEyedJack(move.code);
+      if (showsShoutout) showShoutout(move);
+      const preAnnounceMs = showsShoutout ? MOVE_ANNOUNCE_MS : 0;
       scheduleMoveEffects(() => {
         if (move.type === 'card') {
           playMoveSound(move);
           boardView.flashCell(move.targetIndex);
           showCardFly(move);
         }
-      }, MOVE_ANNOUNCE_MS);
-      const totalMs = MOVE_ANNOUNCE_MS + (move.type === 'card' ? CARD_FLY_TOTAL_MS : 0);
+      }, preAnnounceMs);
+      const totalMs = preAnnounceMs + (move.type === 'card' ? CARD_FLY_TOTAL_MS : 0);
       if (move.type === 'card') cardFlyStillRunningMs = totalMs;
       animationsBusyUntil = Date.now() + totalMs;
     }
   }
+
+  // Highlighting a player's playable spots is held back until any animation from
+  // the move that just handed them the turn is fully done (see animationsBusyUntil
+  // above) — nothing else will trigger a fresh render at the exact moment that
+  // finishes, so a follow-up renderGame() is scheduled for then, purely to reveal
+  // the highlight; it's a harmless no-op for everything else in here since
+  // lastSeenMoveTs/lastAnnouncedPid are already up to date by that point.
+  const animationsStillBusy = Date.now() < animationsBusyUntil;
+  let displayHighlight = new Set();
+  if (isMyTurn() && !pendingMove && !animationsStillBusy) {
+    const hand = game.hands[playerId] || [];
+    displayHighlight = ambientHighlightSet(game.board, hand, locked);
+  }
+  clearTimeout(highlightRevealTimeoutId);
+  if (isMyTurn() && !pendingMove && animationsStillBusy) {
+    highlightRevealTimeoutId = setTimeout(renderGame, animationsBusyUntil - Date.now() + 20);
+  }
+  boardView.setState({ board: displayBoard, highlight: displayHighlight, locked, myTeam: myTeam() });
+  renderPlayersStrip(sequences, teamCount, game.currentPlayerId);
+  $('hand-tray').classList.toggle('my-turn', isMyTurn());
 
   // A big, unmissable "it's X's turn" announcement for everyone at the table,
   // whenever the active player actually changes (not on every render, and not on

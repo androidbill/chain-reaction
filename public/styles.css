@@ -67,6 +67,10 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
 .game-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; padding-top: calc(10px + var(--safe-t)); background: var(--panel); border-bottom: 1px solid var(--line); z-index: 20; }
 .turn-banner { font-weight: 700; font-size: 14.5px; }
 .turn-banner .team-dot { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+.game-room-code {
+  font-weight: 700; font-size: 13px; letter-spacing: 2px;
+  color: var(--text-dim); white-space: nowrap;
+}
 /* Floating HUD bubble over the board, ported from HexColony's board-hud: a white
    pill with its own shadow/blur, sitting above the canvas rather than living in the
    nav strip. pointer-events: none so it never steals a tap meant for the board. */

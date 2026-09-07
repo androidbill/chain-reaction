@@ -437,6 +437,7 @@ function stopClockPing() {
 
 function enterRoom(code) {
   roomCode = code;
+  $('game-room-code').textContent = code;
   roomRef = doc(db, 'rooms', code);
   lastSeenMoveTs = undefined;
   wasMyTurn = undefined;

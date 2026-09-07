@@ -596,6 +596,7 @@ function leaveRoom() {
   unsubRoom = null;
   stopClockPing();
   clearTimeout(botTimeoutId);
+  stopPlayAgainRetry();
   solo = false;
   roomRef = null;
   roomCode = null;
@@ -612,6 +613,10 @@ function applyRoom() {
   if (!room) return;
   setTeamColors((room.settings && room.settings.teamColors) || DEFAULT_TEAM_COLORS);
   updateGameKebabVisibility();
+  // The next round already started (or this client left the finished game some other
+  // way) — showWinOverlay(), which is what re-arms this timer, no longer runs, so it
+  // has to be stopped explicitly here or it would just keep firing forever.
+  if (room.state !== 'finished') stopPlayAgainRetry();
   if (room.state === 'lobby') { renderLobby(); showScreen('screen-lobby'); }
   else if (room.state === 'playing' || room.state === 'finished') {
     showScreen('screen-game');
@@ -1903,6 +1908,10 @@ function spawnConfetti(teamColor, count = 60) {
 }
 
 let lastVotesSignature = null;
+let playAgainRetryId = null;
+function stopPlayAgainRetry() {
+  if (playAgainRetryId) { clearInterval(playAgainRetryId); playAgainRetryId = null; }
+}
 function showWinOverlay(winnerTeam) {
   const overlay = $('win-overlay');
   const game = room.game;
@@ -1972,6 +1981,18 @@ function showWinOverlay(winnerTeam) {
     lastVotesSignature = signature;
     maybeStartNextGame();
   }
+
+  // Belt-and-suspenders: everyone agreeing should always kick off the next round
+  // immediately via the signature check above, but if a transaction attempt were
+  // ever swallowed by a transient network error, nothing would naturally retry it
+  // (nobody's vote changes again) and the whole table would sit on this screen
+  // forever. So once every seat has voted, keep quietly re-attempting on a timer —
+  // maybeStartNextGame() is already a safe no-op once the room has actually moved
+  // on to 'playing'. Cleared as soon as this overlay is no longer being shown.
+  stopPlayAgainRetry();
+  if (!solo && votedCount > 0 && votedCount === order.length) {
+    playAgainRetryId = setInterval(maybeStartNextGame, 4000);
+  }
 }
 
 // Any client may notice a vote change and check for consensus — the
@@ -2023,7 +2044,7 @@ $('btn-play-again').addEventListener('click', async () => {
   if (!roomRef) return;
   await updateDoc(roomRef, { [`game.playAgainVotes.${playerId}`]: true }).catch(() => toast('Could not register vote'));
 });
-$('btn-quit-game').addEventListener('click', () => { $('win-overlay').hidden = true; leaveRoom(); });
+$('btn-quit-game').addEventListener('click', () => { stopPlayAgainRetry(); $('win-overlay').hidden = true; leaveRoom(); });
 
 // ---------------- Boot ----------------
 watchPublishedVersion();

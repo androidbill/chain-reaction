@@ -368,20 +368,22 @@ async function joinRoom(code) {
 // Phone clocks disagree with the server, sometimes by minutes, and the turn timer is
 // only meaningful measured against the server's clock — a phone running fast would
 // otherwise see its own turn expire the instant it started. A fresh (non-cached)
-// delivery of a NEW game.turnStartedAt doubles as a clock sample: the gap between
-// that server timestamp and this device's Date.now() at the moment it arrived is
+// delivery of game.turnStartedAt doubles as a clock sample: the gap between that
+// server timestamp and this device's Date.now() at the moment it arrived is
 // (approximately) this device's offset from the server.
 //
-// A genuinely new value showing up while already subscribed and watching is usable
-// this way, since a live push arrives within a fraction of a second of being written.
-// But the very first snapshot this device sees after (re)subscribing is NOT usable —
-// it can just as easily be a turn that's already been running for 20+ of its 30
-// seconds (joining mid-game, or resyncing after a stall), and would bias the sample
-// by however stale it actually is. bootstrapPending tracks that "don't know yet"
-// window and is reset every time the subscription itself is torn down and rebuilt.
+// A sample taken from a turn that's already been running a while (joining mid-game,
+// resyncing after a stall) is stale, but that staleness can only ever push the
+// estimate in the SAFE direction: serverMs is always <= the true current server time,
+// so serverMs - Date.now() always <= the true offset, and taking the max of recent
+// samples can never overshoot it. A stale sample can make the countdown run more
+// generous than 30s; it can never make it expire early. So every fresh delivery is
+// usable — there's no "wait for a trustworthy one" case to special-case here, and
+// trying to (a previous version of this code excluded first-time reads, hunting for
+// a small imprecision) risked never sampling at all if a device's live stream stayed
+// flaky, which hid the timer entirely rather than just showing it a bit too generous.
 let clockSamples = [];
 let clockOffset = null;
-let bootstrapPending = true;
 function noteServerTime(serverMs) {
   // Every sample UNDER-estimates the offset by its own network latency, so the
   // largest recent sample is the one that travelled fastest and is closest to truth.
@@ -392,9 +394,7 @@ function noteServerTime(serverMs) {
 const serverNow = () => Date.now() + (clockOffset || 0);
 function noteFreshRoom(data, fresh) {
   const ms = data.game && data.game.turnStartedAt ? data.game.turnStartedAt.toMillis() : null;
-  const wasBootstrap = bootstrapPending;
-  bootstrapPending = false;
-  if (fresh && ms != null && !wasBootstrap) noteServerTime(ms);
+  if (fresh && ms != null) noteServerTime(ms);
 }
 
 function enterRoom(code) {
@@ -403,7 +403,6 @@ function enterRoom(code) {
   lastSeenMoveTs = undefined;
   wasMyTurn = undefined;
   lastVotesSignature = null;
-  bootstrapPending = true;
   localStorage.setItem('cr_room', code);
   subscribeRoom();
   // The listener above can still be the one that stalls on a cold iOS connection. A direct
@@ -436,9 +435,6 @@ function subscribeRoom() {
 // on the SDK's own retry timing.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !roomRef) return;
-  // A phone can sit backgrounded for well over one turn, so treat the resubscribe
-  // exactly like a fresh join: its first reading is untrusted for clock sampling too.
-  bootstrapPending = true;
   subscribeRoom();
   getDocFromServer(roomRef).then((snap) => {
     if (snap.exists()) { room = snap.data(); noteFreshRoom(room, true); applyRoom(); }
@@ -516,6 +512,29 @@ async function cycleMyTeam(teamCount) {
   await updateDoc(roomRef, { [`players.${playerId}.team`]: next }).catch(() => {});
 }
 
+// Turn order alternates across teams (Red, Blue, Red, Blue — not Red, Red, Blue,
+// Blue), which is how Sequence is actually played: it's what makes a removal or a
+// blocked line matter to the very next player instead of only to a teammate who
+// already had their turn. Join order only breaks ties within a team.
+function computeTurnOrder(pids, players) {
+  const byTeam = new Map();
+  const sortedByJoin = pids.slice().sort((a, b) => players[a].joinedAt - players[b].joinedAt);
+  for (const pid of sortedByJoin) {
+    const t = players[pid].team;
+    if (!byTeam.has(t)) byTeam.set(t, []);
+    byTeam.get(t).push(pid);
+  }
+  const teams = [...byTeam.keys()].sort((a, b) => a - b);
+  const order = [];
+  for (let i = 0; order.length < pids.length; i++) {
+    for (const t of teams) {
+      const list = byTeam.get(t);
+      if (i < list.length) order.push(list[i]);
+    }
+  }
+  return order;
+}
+
 $('btn-start-game').addEventListener('click', async () => {
   if (!room || room.hostId !== playerId) return;
   const teamCount = room.settings.teamCount;
@@ -526,7 +545,7 @@ $('btn-start-game').addEventListener('click', async () => {
   for (let t = 0; t < teamCount; t++) {
     if (!teamsUsed.has(t)) { toast(`Team ${TEAM_NAMES[t]} has no players`); return; }
   }
-  const order = pids.slice().sort((a, b) => room.players[a].joinedAt - room.players[b].joinedAt);
+  const order = computeTurnOrder(pids, room.players);
   const game = dealNewGame(order, teamCount);
   await updateDoc(roomRef, { state: 'playing', paused: false, pausedBy: null, order, game }).catch(() => toast('Could not start game'));
 });

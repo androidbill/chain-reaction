@@ -1263,12 +1263,25 @@ function renderGame() {
     const isFirstLoad = lastSeenMoveTs === undefined;
     lastSeenMoveTs = game.lastMove.ts;
     if (!isFirstLoad) {
-      showShoutout(game.lastMove);
-      if (game.lastMove.type === 'card') {
-        playMoveSound(game.lastMove);
-        boardView.flashCell(game.lastMove.targetIndex);
-        showCardFly(game.lastMove);
+      const move = game.lastMove;
+      const isSpecial = move.type === 'card' && (isTwoEyedJack(move.code) || isOneEyedJack(move.code));
+      if (isSpecial) {
+        // Called out on its own, ahead of the card actually appearing, since a wild
+        // or a removal changes the board in a way that's easy to miss at a glance
+        // (a chip vanishing, a card that isn't going where its rank/suit implies) —
+        // worth a beat of "look, this is what just happened" before the visuals.
+        const mover = room.players[move.playerId];
+        const color = TEAM_COLOR[mover ? mover.team : 0];
+        showMoveAnnounce(`${move.name} plays ${isTwoEyedJack(move.code) ? 'Wild' : 'Removal'}`, color);
       }
+      scheduleMoveEffects(() => {
+        showShoutout(move);
+        if (move.type === 'card') {
+          playMoveSound(move);
+          boardView.flashCell(move.targetIndex);
+          showCardFly(move);
+        }
+      }, isSpecial ? 2000 : 0);
     }
   }
 
@@ -1895,6 +1908,37 @@ function showTurnAnnounce(text) {
     el.classList.remove('show');
     setTimeout(() => { el.hidden = true; }, 250);
   }, 1400);
+}
+
+// Same white-pill HUD language as showTurnAnnounce, but the text is colored in the
+// mover's own team color instead of the fixed dark gray. A separate element/timer
+// from #turn-announce (rather than reusing it) so a wild/removal call-out and a
+// turn change landing close together don't cut each other's timer short.
+function showMoveAnnounce(text, color) {
+  const el = $('move-announce');
+  el.innerHTML = `<div class="turn-announce-text" style="color:${color}">${text}</div>`;
+  el.hidden = false;
+  el.classList.remove('show');
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(showMoveAnnounce._t);
+  showMoveAnnounce._t = setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => { el.hidden = true; }, 250);
+  }, 2000);
+}
+
+// A wild/removal play holds its showMoveAnnounce() pill on screen for 2s before the
+// usual sound/flash/card-fly/shoutout sequence runs, so the call-out is actually
+// read before the board changes; an ordinary card play runs that sequence
+// immediately (delayMs 0). Tracked so a second move arriving while an earlier one's
+// delayed effects are still pending cancels them, rather than firing late on top of
+// whatever the newer move already showed.
+let moveEffectsTimeoutId = null;
+function scheduleMoveEffects(fn, delayMs) {
+  clearTimeout(moveEffectsTimeoutId);
+  if (delayMs > 0) moveEffectsTimeoutId = setTimeout(fn, delayMs);
+  else fn();
 }
 
 // A played card appears large in the middle of the board, then flies down and

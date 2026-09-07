@@ -382,8 +382,21 @@ async function joinRoom(code) {
 // trying to (a previous version of this code excluded first-time reads, hunting for
 // a small imprecision) risked never sampling at all if a device's live stream stayed
 // flaky, which hid the timer entirely rather than just showing it a bit too generous.
+//
+// Relying only on turnStartedAt for samples turned out to be too sparse in real play:
+// it only changes when a move actually lands, and a phone that gets locked between
+// turns resubscribes on unlock — if the next move doesn't land before the NEXT lock,
+// that phone can go long stretches (in principle indefinitely) without ever taking a
+// usable sample, which leaves clockOffset unmeasured and the timer hidden the whole
+// game. HexColony solves this with a room-independent heartbeat ticking every few
+// seconds specifically so a clock sample is always imminent regardless of game
+// activity; this borrows the same idea, scaled down to one field on the room doc
+// (chain-reaction has no need for HexColony's full liveness/reconnect ladder, just
+// the frequent server-time reference).
+const CLOCK_PING_MS = 8000;
 let clockSamples = [];
 let clockOffset = null;
+let clockPingIntervalId = null;
 function noteServerTime(serverMs) {
   // Every sample UNDER-estimates the offset by its own network latency, so the
   // largest recent sample is the one that travelled fastest and is closest to truth.
@@ -393,8 +406,25 @@ function noteServerTime(serverMs) {
 }
 const serverNow = () => Date.now() + (clockOffset || 0);
 function noteFreshRoom(data, fresh) {
-  const ms = data.game && data.game.turnStartedAt ? data.game.turnStartedAt.toMillis() : null;
-  if (fresh && ms != null) noteServerTime(ms);
+  if (!fresh) return;
+  const turnMs = data.game && data.game.turnStartedAt ? data.game.turnStartedAt.toMillis() : null;
+  if (turnMs != null) noteServerTime(turnMs);
+  const pingMs = data.clockPingAt ? data.clockPingAt.toMillis() : null;
+  if (pingMs != null) noteServerTime(pingMs);
+}
+
+// Only the host pings, to avoid every phone in the room writing every few seconds —
+// one fresh timestamp every ~8s is plenty for every OTHER client's onSnapshot listener
+// to pick up too, since it's a real write to the room doc they're all already watching.
+function startClockPing() {
+  stopClockPing();
+  clockPingIntervalId = setInterval(() => {
+    if (!roomRef || !room || room.hostId !== playerId) return;
+    updateDoc(roomRef, { clockPingAt: serverTimestamp() }).catch(() => {});
+  }, CLOCK_PING_MS);
+}
+function stopClockPing() {
+  if (clockPingIntervalId) { clearInterval(clockPingIntervalId); clockPingIntervalId = null; }
 }
 
 function enterRoom(code) {
@@ -404,6 +434,7 @@ function enterRoom(code) {
   wasMyTurn = undefined;
   lastVotesSignature = null;
   localStorage.setItem('cr_room', code);
+  startClockPing();
   subscribeRoom();
   // The listener above can still be the one that stalls on a cold iOS connection. A direct
   // server read runs over a fresh request rather than the long-lived stream, so it lands
@@ -439,11 +470,16 @@ document.addEventListener('visibilitychange', () => {
   getDocFromServer(roomRef).then((snap) => {
     if (snap.exists()) { room = snap.data(); noteFreshRoom(room, true); applyRoom(); }
   }).catch(() => {});
+  // If this device is the host, don't make it wait up to CLOCK_PING_MS for the
+  // interval to come back around — a phone that just unlocked is exactly the device
+  // most likely to still have an unmeasured clock.
+  if (room && room.hostId === playerId) updateDoc(roomRef, { clockPingAt: serverTimestamp() }).catch(() => {});
 });
 
 function leaveRoom() {
   if (unsubRoom) unsubRoom();
   unsubRoom = null;
+  stopClockPing();
   roomRef = null;
   roomCode = null;
   room = null;

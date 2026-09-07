@@ -144,6 +144,13 @@ export class BoardView {
     return indexAtPoint(x, y);
   }
 
+  // Where a cell's center actually is on screen right now, in CSS pixels relative to
+  // the canvas's own top-left — exactly what a caller outside the canvas (an
+  // absolutely-positioned DOM element sharing that origin) needs to land on it.
+  cellScreenPoint(index) {
+    return this.toScreen(...cellCenter(index));
+  }
+
   _onDown(e) {
     try { this.canvas.setPointerCapture(e.pointerId); } catch (err) { /* some browsers can reject this; harmless */ }
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });

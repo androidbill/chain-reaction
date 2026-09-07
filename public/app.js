@@ -56,6 +56,7 @@ let pendingMove = null; // { instanceId, index, action, code, deadline } — sta
 let pendingMoveTimeout = null;
 let lastSeenMoveTs = undefined; // undefined = not initialized yet for this room
 let wasMyTurn = undefined; // undefined = not initialized yet for this room
+let lastAnnouncedPid = undefined; // undefined = not initialized yet for this room
 let timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
 let timerIntervalId = null;
 let deferredInstallPrompt = null;
@@ -432,6 +433,7 @@ function enterRoom(code) {
   roomRef = doc(db, 'rooms', code);
   lastSeenMoveTs = undefined;
   wasMyTurn = undefined;
+  lastAnnouncedPid = undefined;
   lastVotesSignature = null;
   localStorage.setItem('cr_room', code);
   startClockPing();
@@ -499,7 +501,17 @@ function applyRoom() {
     showScreen('screen-game');
     ensureBoardView();
     boardView.resize();
-    renderGame();
+    // A thrown error partway through renderGame() (a bad board index, a canvas call
+    // that doesn't like a transient size) used to silently abort everything after it
+    // in the same pass — including the turn timer update, which runs near the end.
+    // That's a plausible way for "the timer never shows" to have nothing to do with
+    // the timer at all. Surface it loudly instead of failing silently.
+    try {
+      renderGame();
+    } catch (e) {
+      console.error(e);
+      toast('Render error: ' + (e && e.message ? e.message : e));
+    }
     if (room.state === 'finished' && room.game && room.game.winnerTeam != null) {
       showWinOverlay(room.game.winnerTeam);
     }
@@ -629,7 +641,7 @@ function isMyTurn() {
 // A persistent strip showing every player's team and how many lines their
 // team has completed so far — the shoutout is a one-off notice, this is
 // the "up by their name" running record the user also asked for.
-function renderPlayersStrip(sequences, teamCount) {
+function renderPlayersStrip(sequences, teamCount, currentPlayerId) {
   const strip = $('players-strip');
   strip.innerHTML = '';
   const counts = countSequencesByTeam(sequences, teamCount);
@@ -639,7 +651,7 @@ function renderPlayersStrip(sequences, teamCount) {
     const p = room.players[pid];
     if (!p) continue;
     const chip = document.createElement('div');
-    chip.className = 'player-chip';
+    chip.className = 'player-chip' + (pid === currentPlayerId && !room.paused ? ' up' : '');
     const dot = document.createElement('span');
     dot.className = 'team-dot';
     dot.style.background = TEAM_COLOR[p.team] || '#888';
@@ -682,6 +694,11 @@ function renderGame() {
   const sequences = computeSequences(game.board, teamCount);
   const locked = lockedIndicesFrom(sequences);
 
+  // Update the timer before anything canvas- or DOM-heavy runs below, so a render
+  // error further down (a bad board index, a transient canvas sizing issue) can never
+  // take the timer down with it.
+  updateTurnTimer(game);
+
   // While a move is staged (pending the undo window), preview it locally —
   // nothing is written to Firestore yet, so this is purely a display overlay.
   let displayBoard = game.board;
@@ -696,7 +713,8 @@ function renderGame() {
     highlight = ambientHighlightSet(game.board, hand, locked);
   }
   boardView.setState({ board: displayBoard, highlight, locked, myTeam: myTeam() });
-  renderPlayersStrip(sequences, teamCount);
+  renderPlayersStrip(sequences, teamCount, game.currentPlayerId);
+  $('hand-tray').classList.toggle('my-turn', isMyTurn());
 
   const turnBanner = $('turn-banner');
   const curPid = game.currentPlayerId;
@@ -713,7 +731,16 @@ function renderGame() {
     turnBanner.innerHTML = `<span class="team-dot" style="background:${TEAM_COLOR[curPlayer.team]}"></span> ${curPlayer.name}'s turn`;
   }
 
-  updateTurnTimer(game);
+  // A big, unmissable "it's X's turn" announcement for everyone at the table,
+  // whenever the active player actually changes (not on every render, and not on
+  // the first load of a game already in progress).
+  if (curPlayer && curPid !== lastAnnouncedPid) {
+    const isFirstLoad = lastAnnouncedPid === undefined;
+    lastAnnouncedPid = curPid;
+    if (!isFirstLoad && !room.paused) {
+      showTurnAnnounce(isMyTurn() ? 'Your turn!' : `${curPlayer.name}'s turn!`);
+    }
+  }
 
   if (game.lastMove && game.lastMove.ts !== lastSeenMoveTs) {
     const isFirstLoad = lastSeenMoveTs === undefined;
@@ -723,6 +750,7 @@ function renderGame() {
       if (game.lastMove.type === 'card') {
         playMoveSound();
         boardView.flashCell(game.lastMove.targetIndex);
+        showCardFly(game.lastMove);
       }
     }
   }
@@ -1035,12 +1063,21 @@ function stopTurnTimer() {
 }
 
 function updateTurnTimer(game) {
-  // clockOffset starts null until the first post-bootstrap sample lands (normally
-  // within one round trip of joining). Rendering a countdown before that would anchor
-  // it to a completely uncorrected device clock for the rest of the turn — showing
-  // nothing for a moment is better than showing a wrong number for 30 seconds.
-  if (!game || room.state !== 'playing' || room.paused || !game.turnStartedAt || clockOffset === null) {
+  if (!game || room.state !== 'playing' || room.paused || !game.turnStartedAt) {
     stopTurnTimer();
+    return;
+  }
+  // clockOffset starts null until the first sample lands (normally within a couple
+  // of seconds of joining, via the clock-ping heartbeat). Rendering a countdown
+  // before that would anchor it to a completely uncorrected device clock for the
+  // rest of the turn — so show the element with a "still working it out" placeholder
+  // instead of a wrong number, the same way HexColony's timer does.
+  if (clockOffset === null) {
+    if (timerIntervalId) { clearInterval(timerIntervalId); timerIntervalId = null; }
+    const el = $('turn-timer');
+    el.hidden = false;
+    el.textContent = '⏱ ⋯';
+    el.classList.remove('low');
     return;
   }
   const startedAtMillis = game.turnStartedAt.toMillis();
@@ -1114,6 +1151,52 @@ function showShoutout(move) {
   el.classList.add('show');
   clearTimeout(showShoutout._t);
   showShoutout._t = setTimeout(() => { el.classList.remove('show'); }, duration);
+}
+
+function showTurnAnnounce(text) {
+  const el = $('turn-announce');
+  el.innerHTML = `<div class="turn-announce-text">${text}</div>`;
+  el.hidden = false;
+  el.classList.remove('show');
+  void el.offsetWidth; // restart the transition if one is already showing
+  el.classList.add('show');
+  clearTimeout(showTurnAnnounce._t);
+  showTurnAnnounce._t = setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => { el.hidden = true; }, 250);
+  }, 1400);
+}
+
+// A played card appears large in the middle of the board, then flies down and
+// shrinks onto the exact cell it landed on — computed from the board's own current
+// pan/zoom via BoardView.cellScreenPoint(), so it lands in the right place even if
+// the player has panned or zoomed the board.
+function showCardFly(move) {
+  const el = $('card-fly');
+  const rank = cardRank(move.code);
+  const suit = cardSuit(move.code);
+  el.className = 'card-fly' + (SUIT_COLOR[suit] === 'red' ? ' red' : '');
+  $('card-fly-r').textContent = rank;
+  $('card-fly-s').textContent = SUIT_SYMBOL[suit];
+  el.style.left = '50%';
+  el.style.top = '42%';
+  el.hidden = false;
+  clearTimeout(showCardFly._t1);
+  clearTimeout(showCardFly._t2);
+  // Force layout before adding .show, so the appear transition actually runs instead
+  // of the browser coalescing it with the class change below into one jump.
+  void el.offsetWidth;
+  el.classList.add('show');
+  showCardFly._t1 = setTimeout(() => {
+    const [sx, sy] = boardView.cellScreenPoint(move.targetIndex);
+    el.style.left = sx + 'px';
+    el.style.top = sy + 'px';
+    el.classList.add('landing');
+    showCardFly._t2 = setTimeout(() => {
+      el.hidden = true;
+      el.classList.remove('show', 'landing');
+    }, 420);
+  }, 550);
 }
 
 function formatDuration(ms) {

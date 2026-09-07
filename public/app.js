@@ -64,6 +64,11 @@ let lastSeenMoveTs = undefined; // undefined = not initialized yet for this room
 let wasMyTurn = undefined; // undefined = not initialized yet for this room
 let lastAnnouncedPid = undefined; // undefined = not initialized yet for this room
 let lastCompletedLinesCount = undefined; // undefined = not initialized yet for this room
+// Wall-clock timestamp (Date.now()-based) that the most recent move's own
+// announcement/card-fly sequence will finish playing at — see scheduleBotTurnIfNeeded,
+// which reads this to keep a bot from playing its own move on top of the previous
+// move's animation still running.
+let animationsBusyUntil = 0;
 let celebratedFinishKey = null;
 let celebrating = false;
 let timerState = { startedAtMillis: null, perfAtReceipt: 0, wallAtReceipt: 0, timedOutFired: false };
@@ -557,6 +562,7 @@ function enterRoom(code) {
   wasMyTurn = undefined;
   lastAnnouncedPid = undefined;
   lastCompletedLinesCount = undefined;
+  animationsBusyUntil = 0;
   lastVotesSignature = null;
   celebratedFinishKey = null;
   celebrating = false;
@@ -1057,6 +1063,7 @@ function enterSoloSession() {
   wasMyTurn = undefined;
   lastAnnouncedPid = undefined;
   lastCompletedLinesCount = undefined;
+  animationsBusyUntil = 0;
   celebratedFinishKey = null;
   celebrating = false;
   clockOffset = 0; // nothing but this device involved — no clock skew to correct for
@@ -1111,7 +1118,12 @@ function scheduleBotTurnIfNeeded() {
   if (!solo || !room || room.state !== 'playing' || room.paused) return;
   const curPlayer = room.players[room.game.currentPlayerId];
   if (!curPlayer || !curPlayer.isBot) return;
-  botTimeoutId = setTimeout(runBotTurn, 2000);
+  // At least a 2s "thinking" pause, but never less than however long the previous
+  // move's own shoutout/card-fly animation still has left to run — otherwise a bot
+  // could play its own move while the human's animation (or a slow wild/removal
+  // sequence) is still visibly playing out on top of it.
+  const delay = Math.max(2000, animationsBusyUntil - Date.now());
+  botTimeoutId = setTimeout(runBotTurn, delay);
 }
 
 function runBotTurn() {
@@ -1276,7 +1288,9 @@ function renderGame() {
           showCardFly(move);
         }
       }, MOVE_ANNOUNCE_MS);
-      if (move.type === 'card') cardFlyStillRunningMs = MOVE_ANNOUNCE_MS + CARD_FLY_TOTAL_MS;
+      const totalMs = MOVE_ANNOUNCE_MS + (move.type === 'card' ? CARD_FLY_TOTAL_MS : 0);
+      if (move.type === 'card') cardFlyStillRunningMs = totalMs;
+      animationsBusyUntil = Date.now() + totalMs;
     }
   }
 

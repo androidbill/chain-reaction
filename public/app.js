@@ -15,6 +15,7 @@ import {
   ambientHighlightSet, autoResolveTargets, countSequencesByTeam,
 } from './rules.js';
 import { BoardView, TEAM_COLOR } from './render.js';
+import { sfx } from './audio.js';
 
 const fbApp = initializeApp(firebaseConfig);
 // iOS Safari (including installed PWAs) frequently stalls the SDK's default WebChannel
@@ -110,19 +111,13 @@ function playTone(freq, { start = 0, duration = 0.16, type = 'sine', volume = 0.
   osc.start(t0);
   osc.stop(t0 + duration + 0.02);
 }
-// A rising two-note chime — distinct from the move tick so "it's your turn"
-// never gets confused with "someone just played a card".
-// Same notes and timing as HexColony's sfx.yourTurn(): a low root note under a rising
-// three-note arpeggio, staggered 90ms apart. HexColony's version also runs each note
-// through a shared compressor/reverb chain built for its whole soundscape — not worth
-// pulling in for one cue here, but the pitches/rhythm are what actually make it
-// recognizable as "that sound", and those are reproduced exactly.
+// "It's your turn" — HexColony's actual sfx.yourTurn(), ported in full (compressor,
+// room reverb, detuned "fat" oscillators, real envelopes — see audio.js), not just an
+// approximation of its notes. Runs through its own small AudioContext separate from
+// playTone()'s below, since that one is a much simpler, unrelated synth used only for
+// the move tick.
 function playTurnSound() {
-  ensureAudio();
-  playTone(262, { start: 0, duration: 0.34, type: 'triangle', volume: 0.14 }); // C4
-  playTone(784, { start: 0, duration: 0.26, type: 'triangle', volume: 0.17 }); // G5
-  playTone(1047, { start: 0.09, duration: 0.26, type: 'triangle', volume: 0.17 }); // C6
-  playTone(1319, { start: 0.18, duration: 0.26, type: 'triangle', volume: 0.17 }); // E6
+  sfx.yourTurn();
 }
 // A single short, low-key tick for any card played (place, remove, or wild).
 function playMoveSound() {
@@ -141,7 +136,7 @@ async function checkForUpdate() {
 }
 function announceUpdate() { $('update-banner').hidden = false; }
 const CORE_FILES = [
-  'index.html', 'app.js', 'board.js', 'render.js', 'cards.js', 'rules.js',
+  'index.html', 'app.js', 'board.js', 'render.js', 'cards.js', 'rules.js', 'audio.js',
   'firebase-config.js', 'version.js', 'styles.css', 'manifest.webmanifest',
 ];
 async function fullRefresh() {

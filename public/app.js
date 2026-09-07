@@ -30,6 +30,11 @@ const db = initializeFirestore(fbApp, {
 const $ = (id) => document.getElementById(id);
 const TEAM_NAMES = ['Red', 'Blue', 'Green'];
 const TURN_SECONDS = 30;
+// The deck is a fixed 104 cards and every player gets a full 6- or 7-card hand
+// regardless of team size (unlike real Sequence, hand size here doesn't shrink as
+// the table grows) — past 12 players, dealing can run the deck dry mid-deal and
+// leave the last players to join with an empty hand and no way to play at all.
+const MAX_PLAYERS = 12;
 
 // ---------------- Player identity ----------------
 let playerId = localStorage.getItem('cr_player_id');
@@ -346,6 +351,7 @@ async function joinRoom(code) {
     const data = snap.data();
     if (data.state !== 'lobby' && !data.players[playerId]) { toast('That game already started'); return; }
     if (!data.players[playerId]) {
+      if (Object.keys(data.players).length >= MAX_PLAYERS) { toast(`Room is full (max ${MAX_PLAYERS} players)`); return; }
       await updateDoc(ref, {
         [`players.${playerId}`]: { name: playerName, team: 0, joinedAt: Date.now() },
       });
@@ -361,12 +367,21 @@ async function joinRoom(code) {
 // ---------------- Clock sync ----------------
 // Phone clocks disagree with the server, sometimes by minutes, and the turn timer is
 // only meaningful measured against the server's clock — a phone running fast would
-// otherwise see its own turn expire the instant it started. Every fresh (non-cached)
-// room read carries a just-resolved game.turnStartedAt, which doubles as a clock
-// sample: the gap between that server timestamp and this device's Date.now() at the
-// moment it arrived is (approximately) this device's offset from the server.
+// otherwise see its own turn expire the instant it started. A fresh (non-cached)
+// delivery of a NEW game.turnStartedAt doubles as a clock sample: the gap between
+// that server timestamp and this device's Date.now() at the moment it arrived is
+// (approximately) this device's offset from the server.
+//
+// A genuinely new value showing up while already subscribed and watching is usable
+// this way, since a live push arrives within a fraction of a second of being written.
+// But the very first snapshot this device sees after (re)subscribing is NOT usable —
+// it can just as easily be a turn that's already been running for 20+ of its 30
+// seconds (joining mid-game, or resyncing after a stall), and would bias the sample
+// by however stale it actually is. bootstrapPending tracks that "don't know yet"
+// window and is reset every time the subscription itself is torn down and rebuilt.
 let clockSamples = [];
 let clockOffset = null;
+let bootstrapPending = true;
 function noteServerTime(serverMs) {
   // Every sample UNDER-estimates the offset by its own network latency, so the
   // largest recent sample is the one that travelled fastest and is closest to truth.
@@ -376,7 +391,10 @@ function noteServerTime(serverMs) {
 }
 const serverNow = () => Date.now() + (clockOffset || 0);
 function noteFreshRoom(data, fresh) {
-  if (fresh && data.game && data.game.turnStartedAt) noteServerTime(data.game.turnStartedAt.toMillis());
+  const ms = data.game && data.game.turnStartedAt ? data.game.turnStartedAt.toMillis() : null;
+  const wasBootstrap = bootstrapPending;
+  bootstrapPending = false;
+  if (fresh && ms != null && !wasBootstrap) noteServerTime(ms);
 }
 
 function enterRoom(code) {
@@ -385,6 +403,7 @@ function enterRoom(code) {
   lastSeenMoveTs = undefined;
   wasMyTurn = undefined;
   lastVotesSignature = null;
+  bootstrapPending = true;
   localStorage.setItem('cr_room', code);
   subscribeRoom();
   // The listener above can still be the one that stalls on a cold iOS connection. A direct
@@ -417,6 +436,9 @@ function subscribeRoom() {
 // on the SDK's own retry timing.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !roomRef) return;
+  // A phone can sit backgrounded for well over one turn, so treat the resubscribe
+  // exactly like a fresh join: its first reading is untrusted for clock sampling too.
+  bootstrapPending = true;
   subscribeRoom();
   getDocFromServer(roomRef).then((snap) => {
     if (snap.exists()) { room = snap.data(); noteFreshRoom(room, true); applyRoom(); }
@@ -499,6 +521,7 @@ $('btn-start-game').addEventListener('click', async () => {
   const teamCount = room.settings.teamCount;
   const pids = Object.keys(room.players);
   if (pids.length < 2) { toast('Need at least 2 players'); return; }
+  if (pids.length > MAX_PLAYERS) { toast(`Too many players (max ${MAX_PLAYERS})`); return; }
   const teamsUsed = new Set(pids.map((pid) => room.players[pid].team));
   for (let t = 0; t < teamCount; t++) {
     if (!teamsUsed.has(t)) { toast(`Team ${TEAM_NAMES[t]} has no players`); return; }
@@ -957,7 +980,11 @@ function stopTurnTimer() {
 }
 
 function updateTurnTimer(game) {
-  if (!game || room.state !== 'playing' || room.paused || !game.turnStartedAt) {
+  // clockOffset starts null until the first post-bootstrap sample lands (normally
+  // within one round trip of joining). Rendering a countdown before that would anchor
+  // it to a completely uncorrected device clock for the rest of the turn — showing
+  // nothing for a moment is better than showing a wrong number for 30 seconds.
+  if (!game || room.state !== 'playing' || room.paused || !game.turnStartedAt || clockOffset === null) {
     stopTurnTimer();
     return;
   }

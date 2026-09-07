@@ -64,7 +64,10 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
 
 /* ---------- Game ---------- */
 #screen-game { }
-.game-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; padding-top: calc(10px + var(--safe-t)); background: var(--panel); border-bottom: 1px solid var(--line); z-index: 20; }
+/* padding-right clears the kebab button, which is position:fixed at top-right on
+   every screen (z-index 70, above this bar's own 20) — without it, the room code
+   sitting at this bar's right edge renders straight underneath the button. */
+.game-top { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; padding-right: 60px; padding-top: calc(10px + var(--safe-t)); background: var(--panel); border-bottom: 1px solid var(--line); z-index: 20; }
 .turn-banner { font-weight: 700; font-size: 14.5px; }
 .turn-banner .team-dot { display: inline-block; vertical-align: -2px; margin-right: 6px; }
 .game-room-code {
@@ -153,8 +156,8 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
   border: 2px solid transparent; font-weight: 700; color: #22262e;
 }
 .hand-card.red { color: #b8302a; }
-.hand-card .r { font-size: clamp(11px, 4.6vw, 17px); }
-.hand-card .s { font-size: clamp(12px, 5.2vw, 19px); }
+.hand-card .r { font-size: clamp(20px, 9.2vw, 34px); }
+.hand-card .s { font-size: clamp(22px, 10.4vw, 38px); }
 .hand-card.dead { opacity: 0.4; }
 .hand-card.jack-wild { border-color: #3b7fe0; }
 .hand-card.jack-remove { border-color: #e0473c; }
@@ -218,15 +221,24 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
 .shoutout-card .s { font-size: 13px; }
 .shoutout-text { font-weight: 700; font-size: 14px; white-space: nowrap; }
 
-/* ---------- Big "X's turn" announcement ---------- */
+/* ---------- Big "X's turn" announcement ----------
+   Same white pill/blur/shadow HUD language as the turn-timer bubble (ported from
+   HexColony's board-hud), just larger and centered rather than a small badge, since
+   this is meant to be unmissable rather than a permanent status line. */
 .turn-announce {
   position: absolute; inset: 0; z-index: 35;
   display: flex; align-items: center; justify-content: center;
   pointer-events: none;
 }
 .turn-announce-text {
-  font-size: clamp(28px, 8vw, 48px); font-weight: 800; color: #fff;
-  text-align: center; padding: 0 24px; text-shadow: 0 4px 24px rgba(0,0,0,0.6);
+  padding: 16px 34px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(13, 27, 40, 0.14);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  font-size: clamp(22px, 7vw, 40px); font-weight: 800; color: #22262e;
+  text-align: center;
   opacity: 0; transform: scale(0.8);
   transition: opacity .22s ease, transform .22s ease;
 }
@@ -238,19 +250,19 @@ input[type=text]:focus { outline: 2px solid var(--accent); }
    knows where a cell actually is on screen at the current pan/zoom. ---------- */
 .card-fly {
   position: absolute; z-index: 36; left: 50%; top: 42%;
-  width: 120px; aspect-ratio: 0.72; border-radius: 10px; background: #f4efe4;
+  width: min(66vw, 66vh); aspect-ratio: 0.72; border-radius: 18px; background: #f4efe4;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  font-weight: 800; color: #22262e; box-shadow: 0 14px 40px rgba(0,0,0,0.55);
+  font-weight: 800; color: #22262e; box-shadow: 0 20px 60px rgba(0,0,0,0.6);
   transform: translate(-50%, -50%) scale(1);
   transition: transform .38s cubic-bezier(.3,.1,.3,1), left .38s cubic-bezier(.3,.1,.3,1), top .38s cubic-bezier(.3,.1,.3,1), opacity .2s ease .2s;
   opacity: 0;
   pointer-events: none;
 }
 .card-fly.show { opacity: 1; }
-.card-fly.landing { transform: translate(-50%, -50%) scale(0.28); opacity: 0; }
+.card-fly.landing { transform: translate(-50%, -50%) scale(0.06); opacity: 0; }
 .card-fly.red { color: #b8302a; }
-.card-fly .r { font-size: 30px; }
-.card-fly .s { font-size: 34px; }
+.card-fly .r { font-size: min(20vw, 20vh); }
+.card-fly .s { font-size: min(22vw, 22vh); }
 @media (prefers-reduced-motion: reduce) {
   .turn-announce-text, .card-fly { transition: opacity .12s linear; }
   .card-fly.landing { transform: translate(-50%, -50%) scale(1); }

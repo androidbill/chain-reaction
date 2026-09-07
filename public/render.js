@@ -114,7 +114,7 @@ export class BoardView {
   // Briefly glows one cell — used to call out wherever the most recent move
   // happened (place, remove, or wild), so it's obvious even on someone
   // else's screen. Needs its own animation loop since nothing else would
-  // otherwise trigger a redraw during the 2s window.
+  // otherwise trigger a redraw during the 3s window.
   flashCell(index) {
     this.flashIndex = index;
     this.flashStart = performance.now();
@@ -123,7 +123,7 @@ export class BoardView {
 
   _flashLoop() {
     const elapsed = performance.now() - this.flashStart;
-    if (elapsed >= 2000) {
+    if (elapsed >= 3000) {
       this.flashIndex = null;
       this._flashRaf = null;
       this.draw();
@@ -327,11 +327,11 @@ export class BoardView {
         const suit = cardSuit(code);
         const rank = cardRank(code);
         ctx.fillStyle = SUIT_COLOR[suit] === 'red' ? '#b8302a' : '#22262e';
-        ctx.font = `700 ${w * 0.3}px system-ui, sans-serif`;
+        ctx.font = `700 ${w * 0.6}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(rank, sx + w / 2, sy + h * 0.32);
-        ctx.font = `${w * 0.34}px system-ui, sans-serif`;
+        ctx.font = `${w * 0.68}px system-ui, sans-serif`;
         ctx.fillText(SUIT_SYMBOL[suit], sx + w / 2, sy + h * 0.68);
       }
     }

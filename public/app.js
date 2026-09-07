@@ -1268,7 +1268,7 @@ function showCardFly(move) {
       el.hidden = true;
       el.classList.remove('show', 'landing');
     }, 420);
-  }, 550);
+  }, 1000); // held large and centered for 1s before flying down to the landed cell
 }
 
 function formatDuration(ms) {

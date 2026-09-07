@@ -258,12 +258,12 @@ $('kebab-pause').addEventListener('click', async () => {
   const patch = { paused: next, pausedBy: next ? playerId : null };
   // Resuming gives the current player a fresh 30s rather than trying to
   // account for time spent paused — simpler and avoids clock-skew math.
-  if (!next) patch['game.turnStartedAt'] = serverTimestamp();
+  if (!next) patch.turnStartedAt = serverTimestamp();
   await updateDoc(roomRef, patch).catch(() => toast('Could not update pause state'));
 });
 $('btn-resume-game').addEventListener('click', async () => {
   if (!room || !roomRef) return;
-  await updateDoc(roomRef, { paused: false, pausedBy: null, 'game.turnStartedAt': serverTimestamp() }).catch(() => toast('Could not resume'));
+  await updateDoc(roomRef, { paused: false, pausedBy: null, turnStartedAt: serverTimestamp() }).catch(() => toast('Could not resume'));
 });
 $('kebab-restart').addEventListener('click', async () => {
   closeKebab();
@@ -271,8 +271,8 @@ $('kebab-restart').addEventListener('click', async () => {
   if (!confirm('Restart the game? Everyone gets a fresh deal.')) return;
   const teamCount = room.settings.teamCount;
   const order = room.order && room.order.length ? room.order : Object.keys(room.players);
-  const game = dealNewGame(order, teamCount);
-  await updateDoc(roomRef, { state: 'playing', paused: false, pausedBy: null, game }).catch(() => toast('Could not restart game'));
+  const patch = dealNewGamePatch(order, teamCount);
+  await updateDoc(roomRef, { state: 'playing', paused: false, pausedBy: null, ...patch }).catch(() => toast('Could not restart game'));
 });
 $('kebab-leave-game').addEventListener('click', () => {
   closeKebab();
@@ -369,8 +369,8 @@ async function joinRoom(code) {
 // Phone clocks disagree with the server, sometimes by minutes, and the turn timer is
 // only meaningful measured against the server's clock — a phone running fast would
 // otherwise see its own turn expire the instant it started. A fresh (non-cached)
-// delivery of game.turnStartedAt doubles as a clock sample: the gap between that
-// server timestamp and this device's Date.now() at the moment it arrived is
+// delivery of the room's turnStartedAt doubles as a clock sample: the gap between
+// that server timestamp and this device's Date.now() at the moment it arrived is
 // (approximately) this device's offset from the server.
 //
 // A sample taken from a turn that's already been running a while (joining mid-game,
@@ -408,7 +408,7 @@ function noteServerTime(serverMs) {
 const serverNow = () => Date.now() + (clockOffset || 0);
 function noteFreshRoom(data, fresh) {
   if (!fresh) return;
-  const turnMs = data.game && data.game.turnStartedAt ? data.game.turnStartedAt.toMillis() : null;
+  const turnMs = data.turnStartedAt ? data.turnStartedAt.toMillis() : null;
   if (turnMs != null) noteServerTime(turnMs);
   const pingMs = data.clockPingAt ? data.clockPingAt.toMillis() : null;
   if (pingMs != null) noteServerTime(pingMs);
@@ -594,8 +594,8 @@ $('btn-start-game').addEventListener('click', async () => {
     if (!teamsUsed.has(t)) { toast(`Team ${TEAM_NAMES[t]} has no players`); return; }
   }
   const order = computeTurnOrder(pids, room.players);
-  const game = dealNewGame(order, teamCount);
-  await updateDoc(roomRef, { state: 'playing', paused: false, pausedBy: null, order, game }).catch(() => toast('Could not start game'));
+  const patch = dealNewGamePatch(order, teamCount);
+  await updateDoc(roomRef, { state: 'playing', paused: false, pausedBy: null, order, ...patch }).catch(() => toast('Could not start game'));
 });
 
 function dealNewGame(order, teamCount) {
@@ -613,12 +613,28 @@ function dealNewGame(order, teamCount) {
     turnIndex: 0,
     winnerTeam: null,
     lastMove: null,
-    turnStartedAt: serverTimestamp(),
-    startedAt: serverTimestamp(),
-    finishedAt: null,
     completedLines: [],
     stats: {},
     playAgainVotes: {},
+  };
+}
+
+// turnStartedAt/startedAt/finishedAt live on the ROOM document, siblings of `game`,
+// never nested inside it. They used to be nested, and moves/timeouts/pause-resume
+// (which write turnStartedAt as its own dotted-path field, unrelated to the rest of
+// `game`) always resolved fine — but real play kept turning up games where it read
+// back missing, which only ever traces to dealNewGame()'s original shape: a
+// serverTimestamp() sentinel buried inside a large plain object that itself becomes
+// the single value of one field (`game`) in a non-transactional updateDoc(). Top-level
+// fields are the one pattern already proven solid everywhere else in this file, so
+// this moves the deal-time timestamps there too rather than keep debugging the nested
+// case in place.
+function dealNewGamePatch(order, teamCount) {
+  return {
+    turnStartedAt: serverTimestamp(),
+    startedAt: serverTimestamp(),
+    finishedAt: null,
+    game: dealNewGame(order, teamCount),
   };
 }
 
@@ -981,7 +997,7 @@ async function applyMove(instanceId, targetIndex, action) {
         'game.lastMove': lastMove,
         'game.stats': stats,
         'game.completedLines': completedLines,
-        ...(winnerTeam == null ? { 'game.turnStartedAt': serverTimestamp() } : { state: 'finished', 'game.finishedAt': serverTimestamp() }),
+        ...(winnerTeam == null ? { turnStartedAt: serverTimestamp() } : { state: 'finished', finishedAt: serverTimestamp() }),
       });
     });
   } catch (e) {
@@ -1017,7 +1033,7 @@ async function applyDeadCardSwap(instanceId) {
         'game.deck': deck,
         'game.turnIndex': turnIndex,
         'game.currentPlayerId': order[turnIndex],
-        'game.turnStartedAt': serverTimestamp(),
+        turnStartedAt: serverTimestamp(),
       });
     });
   } catch (e) {
@@ -1041,7 +1057,7 @@ async function attemptTurnTimeout(expectedStartedAtMillis) {
       const data = snap.data();
       const game = data.game;
       if (!game || data.paused || data.state !== 'playing') return;
-      const startedAt = game.turnStartedAt;
+      const startedAt = data.turnStartedAt;
       if (!startedAt || startedAt.toMillis() !== expectedStartedAtMillis) return;
       const order = data.order;
       const timedOutPlayer = data.players[game.currentPlayerId];
@@ -1049,7 +1065,7 @@ async function attemptTurnTimeout(expectedStartedAtMillis) {
       tx.update(roomRef, {
         'game.turnIndex': turnIndex,
         'game.currentPlayerId': order[turnIndex],
-        'game.turnStartedAt': serverTimestamp(),
+        turnStartedAt: serverTimestamp(),
         'game.lastMove': { type: 'timeout', name: timedOutPlayer ? timedOutPlayer.name : 'A player', ts: Date.now() },
       });
     });
@@ -1063,8 +1079,21 @@ function stopTurnTimer() {
 }
 
 function updateTurnTimer(game) {
-  if (!game || room.state !== 'playing' || room.paused || !game.turnStartedAt) {
+  if (!game || room.state !== 'playing' || room.paused) {
     stopTurnTimer();
+    return;
+  }
+  // This specific condition shouldn't be reachable once a game is underway — every
+  // move, timeout, and pause/resume sets it via a plain serverTimestamp() write. If
+  // it's showing up in real play, that's the actual bug, not the clock math below —
+  // surface it visibly instead of just hiding the timer, since a silent hide here is
+  // indistinguishable from every other reason the timer might not show.
+  if (!room.turnStartedAt) {
+    if (timerIntervalId) { clearInterval(timerIntervalId); timerIntervalId = null; }
+    const el = $('turn-timer');
+    el.hidden = false;
+    el.textContent = '⏱ no-start';
+    el.classList.remove('low');
     return;
   }
   // clockOffset starts null until the first sample lands (normally within a couple
@@ -1080,7 +1109,7 @@ function updateTurnTimer(game) {
     el.classList.remove('low');
     return;
   }
-  const startedAtMillis = game.turnStartedAt.toMillis();
+  const startedAtMillis = room.turnStartedAt.toMillis();
   if (timerState.startedAtMillis !== startedAtMillis) {
     timerState = { startedAtMillis, perfAtReceipt: performance.now(), wallAtReceipt: serverNow(), timedOutFired: false };
   }
@@ -1213,8 +1242,8 @@ function showWinOverlay(winnerTeam) {
   $('win-title').textContent = `🎉 Team ${TEAM_NAMES[winnerTeam]} wins!`;
 
   const durationEl = $('stats-duration');
-  durationEl.textContent = (game.startedAt && game.finishedAt && game.startedAt.toMillis && game.finishedAt.toMillis)
-    ? `Game length: ${formatDuration(game.finishedAt.toMillis() - game.startedAt.toMillis())}`
+  durationEl.textContent = (room.startedAt && room.finishedAt && room.startedAt.toMillis && room.finishedAt.toMillis)
+    ? `Game length: ${formatDuration(room.finishedAt.toMillis() - room.startedAt.toMillis())}`
     : '';
 
   const order = room.order && room.order.length ? room.order : Object.keys(room.players);
@@ -1271,8 +1300,8 @@ async function maybeStartNextGame() {
       const order = data.order && data.order.length ? data.order : Object.keys(data.players);
       const allVoted = order.length > 0 && order.every((pid) => votes[pid]);
       if (!allVoted) return;
-      const game = dealNewGame(order, data.settings.teamCount);
-      tx.update(roomRef, { state: 'playing', paused: false, pausedBy: null, game });
+      const patch = dealNewGamePatch(order, data.settings.teamCount);
+      tx.update(roomRef, { state: 'playing', paused: false, pausedBy: null, ...patch });
     });
   } catch (e) { /* lost the race or votes incomplete — fine */ }
 }

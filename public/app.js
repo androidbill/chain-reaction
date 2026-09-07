@@ -1123,12 +1123,23 @@ function scheduleBotTurnIfNeeded() {
   // could play its own move while the human's animation (or a slow wild/removal
   // sequence) is still visibly playing out on top of it.
   const delay = Math.max(2000, animationsBusyUntil - Date.now());
-  botTimeoutId = setTimeout(runBotTurn, delay);
+  // Captured now and re-checked when the timer actually fires (see runBotTurn) —
+  // this exact turn is what this timer is for, identified by both who's on the
+  // move and when their turn started. If anything else has already handled this
+  // turn by the time the delay elapses (however that happened), turnStartedAt will
+  // have moved on and the stale firing bails instead of applying a second move on
+  // top of one the board has already moved past.
+  const expectedPid = room.game.currentPlayerId;
+  const expectedStartedAt = room.turnStartedAt ? room.turnStartedAt.toMillis() : null;
+  botTimeoutId = setTimeout(() => runBotTurn(expectedPid, expectedStartedAt), delay);
 }
 
-function runBotTurn() {
+function runBotTurn(expectedPid, expectedStartedAt) {
   if (!solo || !room || room.state !== 'playing' || room.paused) return;
   const botPid = room.game.currentPlayerId;
+  if (botPid !== expectedPid) return;
+  const startedAt = room.turnStartedAt ? room.turnStartedAt.toMillis() : null;
+  if (startedAt !== expectedStartedAt) return;
   const botPlayer = room.players[botPid];
   if (!botPlayer || !botPlayer.isBot) return;
 

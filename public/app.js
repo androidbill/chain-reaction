@@ -1929,6 +1929,7 @@ function showCardFly(move) {
   $('card-fly-s').textContent = SUIT_SYMBOL[suit];
   el.style.left = '50%';
   el.style.top = '42%';
+  el.style.animation = ''; // clear any leftover override from a previous play's landing (see below)
   el.hidden = false;
   clearTimeout(showCardFly._t1);
   clearTimeout(showCardFly._t2);
@@ -1937,6 +1938,19 @@ function showCardFly(move) {
   void el.offsetWidth;
   el.classList.add('show');
   showCardFly._t1 = setTimeout(() => {
+    // The spin-in keyframe animation is still "in effect" here even though it
+    // finished a second ago (it's forwards-filling) — a running/held animation on a
+    // property always wins over a transition on that same property, so without
+    // cancelling it here, adding .landing below would silently do nothing at all to
+    // transform: the animation would keep holding it at its own end state. Safe to
+    // drop to 'none' right now because that end state (scale(1) rotate(0deg)) is
+    // exactly the base, non-animated value anyway — no visible jump.
+    el.style.animation = 'none';
+    // Force a reflow so the browser actually commits "animation cancelled, back to
+    // the plain transform" as its own frame before the left/top/landing change
+    // below — otherwise both changes can get coalesced into one recalc with no
+    // transition in between, same reflow-forcing trick as the .show entrance above.
+    void el.offsetWidth;
     const [sx, sy] = boardView.cellScreenPoint(move.targetIndex);
     el.style.left = sx + 'px';
     el.style.top = sy + 'px';

@@ -649,8 +649,6 @@ function dealNewGamePatch(order, teamCount) {
 function ensureBoardView() {
   if (boardView) return;
   boardView = new BoardView($('board-canvas'), { onPick: onBoardPick });
-  $('btn-zoom-in').addEventListener('click', () => boardView.zoomBy(1.25, boardView.w / 2, boardView.h / 2));
-  $('btn-zoom-out').addEventListener('click', () => boardView.zoomBy(0.8, boardView.w / 2, boardView.h / 2));
   $('btn-zoom-reset').addEventListener('click', () => boardView.resetView());
 }
 

@@ -358,6 +358,27 @@ async function joinRoom(code) {
   }
 }
 
+// ---------------- Clock sync ----------------
+// Phone clocks disagree with the server, sometimes by minutes, and the turn timer is
+// only meaningful measured against the server's clock — a phone running fast would
+// otherwise see its own turn expire the instant it started. Every fresh (non-cached)
+// room read carries a just-resolved game.turnStartedAt, which doubles as a clock
+// sample: the gap between that server timestamp and this device's Date.now() at the
+// moment it arrived is (approximately) this device's offset from the server.
+let clockSamples = [];
+let clockOffset = null;
+function noteServerTime(serverMs) {
+  // Every sample UNDER-estimates the offset by its own network latency, so the
+  // largest recent sample is the one that travelled fastest and is closest to truth.
+  clockSamples.push(serverMs - Date.now());
+  if (clockSamples.length > 8) clockSamples.shift();
+  clockOffset = Math.max(...clockSamples);
+}
+const serverNow = () => Date.now() + (clockOffset || 0);
+function noteFreshRoom(data, fresh) {
+  if (fresh && data.game && data.game.turnStartedAt) noteServerTime(data.game.turnStartedAt.toMillis());
+}
+
 function enterRoom(code) {
   roomCode = code;
   roomRef = doc(db, 'rooms', code);
@@ -370,19 +391,21 @@ function enterRoom(code) {
   // server read runs over a fresh request rather than the long-lived stream, so it lands
   // even while that stream is still negotiating — the first paint stops depending on it.
   getDocFromServer(roomRef).then((snap) => {
-    if (snap.exists()) { room = snap.data(); applyRoom(); }
+    if (snap.exists()) { room = snap.data(); noteFreshRoom(room, true); applyRoom(); }
   }).catch(() => {});
 }
 
 function subscribeRoom() {
   if (unsubRoom) unsubRoom();
-  unsubRoom = onSnapshot(roomRef, (snap) => {
+  unsubRoom = onSnapshot(roomRef, { includeMetadataChanges: true }, (snap) => {
     if (!snap.exists()) {
+      if (snap.metadata.fromCache) return;
       toast('The room was closed');
       leaveRoom();
       return;
     }
     room = snap.data();
+    noteFreshRoom(room, !snap.metadata.fromCache);
     applyRoom();
   }, () => {});
 }
@@ -396,7 +419,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !roomRef) return;
   subscribeRoom();
   getDocFromServer(roomRef).then((snap) => {
-    if (snap.exists()) { room = snap.data(); applyRoom(); }
+    if (snap.exists()) { room = snap.data(); noteFreshRoom(room, true); applyRoom(); }
   }).catch(() => {});
 });
 
@@ -940,7 +963,7 @@ function updateTurnTimer(game) {
   }
   const startedAtMillis = game.turnStartedAt.toMillis();
   if (timerState.startedAtMillis !== startedAtMillis) {
-    timerState = { startedAtMillis, perfAtReceipt: performance.now(), wallAtReceipt: Date.now(), timedOutFired: false };
+    timerState = { startedAtMillis, perfAtReceipt: performance.now(), wallAtReceipt: serverNow(), timedOutFired: false };
   }
   $('turn-timer').hidden = false;
   if (!timerIntervalId) timerIntervalId = setInterval(tickTurnTimer, 250);
@@ -950,11 +973,12 @@ function updateTurnTimer(game) {
 function tickTurnTimer() {
   const { startedAtMillis, wallAtReceipt, perfAtReceipt } = timerState;
   if (startedAtMillis == null) return;
-  // Elapsed time = (gap between server turn-start and when we anchored it,
-  // per our own clock) + (monotonic time since anchoring). The one-time
-  // wall-clock read only sets the starting offset; performance.now() never
-  // jumps, so a skewed or drifting device clock can't desync the countdown
-  // mid-turn — only the very first reading depends on the local clock at all.
+  // Elapsed time = (gap between server turn-start and when we anchored it, per our
+  // clock-corrected estimate of the server's clock) + (monotonic time since
+  // anchoring). The one-time wall-clock read only sets the starting offset;
+  // performance.now() never jumps, so a skewed or drifting device clock can't
+  // desync the countdown mid-turn — only the very first reading depends on it,
+  // and serverNow() is what keeps that reading honest.
   const elapsed = (wallAtReceipt - startedAtMillis) + (performance.now() - perfAtReceipt);
   const remainingMs = TURN_SECONDS * 1000 - elapsed;
   const seconds = Math.max(0, Math.ceil(remainingMs / 1000));

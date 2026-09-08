@@ -304,23 +304,21 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeKebab
 $('kebab-refresh').addEventListener('click', () => { closeKebab(); fullRefresh(); });
 $('kebab-share').addEventListener('click', async () => {
   closeKebab();
-  // The menu item's own visibility only depends on `solo`, not on roomCode being
-  // set — so if those two were ever out of sync for any reason, this used to
-  // return with zero visible sign anything happened at all, indistinguishable
-  // from every other silent failure mode here.
-  if (solo) return;
-  if (!roomCode) { toast('No room code to share right now'); return; }
+  // With an active room code, share that (join-my-game); otherwise — on the home
+  // screen, or playing solo — there's nothing to join, so share the app itself.
   const url = location.origin + location.pathname;
-  const text = `Join my Chain Reaction game — room code ${roomCode}`;
+  const text = roomCode
+    ? `Join my Chain Reaction game — room code ${roomCode}`
+    : 'Play Chain Reaction with me!';
   const fallback = async () => {
     try {
       await navigator.clipboard.writeText(`${text} ${url}`);
       toast('Link copied');
     } catch (e) {
       // Clipboard access can fail too (permissions, an unfocused page, an
-      // unsupported browser) — the room code itself, shown directly, is a
-      // fallback that can't fail the same way.
-      toast(`Room code: ${roomCode}`);
+      // unsupported browser) — showing the link/code directly is a fallback that
+      // can't fail the same way.
+      toast(roomCode ? `Room code: ${roomCode}` : url);
     }
   };
   if (navigator.share) {
@@ -767,7 +765,6 @@ function applyRoom() {
 
 function updateGameKebabVisibility() {
   const inGame = room && (room.state === 'playing' || room.state === 'finished');
-  $('kebab-share').hidden = solo; // solo has no room code to invite anyone to
   $('kebab-leave-game').hidden = !inGame;
   $('kebab-restart').hidden = !inGame || room.hostId !== playerId;
   $('kebab-pause').hidden = !inGame || room.state === 'finished';

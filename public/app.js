@@ -304,13 +304,36 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeKebab
 $('kebab-refresh').addEventListener('click', () => { closeKebab(); fullRefresh(); });
 $('kebab-share').addEventListener('click', async () => {
   closeKebab();
-  if (solo || !roomCode) return; // no code to share, and the item is hidden anyway
+  // The menu item's own visibility only depends on `solo`, not on roomCode being
+  // set — so if those two were ever out of sync for any reason, this used to
+  // return with zero visible sign anything happened at all, indistinguishable
+  // from every other silent failure mode here.
+  if (solo) return;
+  if (!roomCode) { toast('No room code to share right now'); return; }
   const url = location.origin + location.pathname;
   const text = `Join my Chain Reaction game — room code ${roomCode}`;
+  const fallback = async () => {
+    try {
+      await navigator.clipboard.writeText(`${text} ${url}`);
+      toast('Link copied');
+    } catch (e) {
+      // Clipboard access can fail too (permissions, an unfocused page, an
+      // unsupported browser) — the room code itself, shown directly, is a
+      // fallback that can't fail the same way.
+      toast(`Room code: ${roomCode}`);
+    }
+  };
   if (navigator.share) {
     try {
-      await navigator.share({ title: 'Chain Reaction', text, url });
-      return;
+      // Raced against a timeout: some Android WebView/PWA share implementations
+      // are known to leave the returned promise neither resolved nor rejected in
+      // certain configurations (no compatible share target registered, etc.) —
+      // without this, that hang would silently swallow the tap forever, since
+      // nothing after an await that never settles ever runs, catch block included.
+      let timedOut = false;
+      const timeout = new Promise((resolve) => setTimeout(() => { timedOut = true; resolve(); }, 8000));
+      await Promise.race([navigator.share({ title: 'Chain Reaction', text, url }), timeout]);
+      if (!timedOut) return;
     } catch (e) {
       // The user closing the share sheet themselves is not a failure worth telling
       // them about — anything else (share genuinely unavailable, a permissions
@@ -319,15 +342,7 @@ $('kebab-share').addEventListener('click', async () => {
       if (e && e.name === 'AbortError') return;
     }
   }
-  try {
-    await navigator.clipboard.writeText(`${text} ${url}`);
-    toast('Link copied');
-  } catch (e) {
-    // Clipboard access can fail too (permissions, an unfocused page, an
-    // unsupported browser) — the room code itself, shown directly, is a fallback
-    // that can't fail the same way.
-    toast(`Room code: ${roomCode}`);
-  }
+  await fallback();
 });
 $('kebab-about').addEventListener('click', () => {
   closeKebab();

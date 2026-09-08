@@ -308,11 +308,26 @@ $('kebab-share').addEventListener('click', async () => {
   const url = location.origin + location.pathname;
   const text = `Join my Chain Reaction game — room code ${roomCode}`;
   if (navigator.share) {
-    try { await navigator.share({ title: 'Chain Reaction', text, url }); } catch (e) {}
-    return;
+    try {
+      await navigator.share({ title: 'Chain Reaction', text, url });
+      return;
+    } catch (e) {
+      // The user closing the share sheet themselves is not a failure worth telling
+      // them about — anything else (share genuinely unavailable, a permissions
+      // error) falls through to the clipboard fallback below instead of just
+      // silently doing nothing, which is exactly what this used to do.
+      if (e && e.name === 'AbortError') return;
+    }
   }
-  await navigator.clipboard.writeText(`${text} ${url}`);
-  toast('Link copied');
+  try {
+    await navigator.clipboard.writeText(`${text} ${url}`);
+    toast('Link copied');
+  } catch (e) {
+    // Clipboard access can fail too (permissions, an unfocused page, an
+    // unsupported browser) — the room code itself, shown directly, is a fallback
+    // that can't fail the same way.
+    toast(`Room code: ${roomCode}`);
+  }
 });
 $('kebab-about').addEventListener('click', () => {
   closeKebab();
